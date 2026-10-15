@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="מחברת עיפרון">
+<meta name="theme-color" content="#fbfaf6">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box;height:100%}body{margin:0;font:14px system-ui,-apple-system,sans-serif}img{max-width:100%}</style>
+<title>מחברת עיפרון</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700&display=swap">
+<style>
+/* Layout: full-screen paper with stacked layer canvases; brush panel on the left, layers panel on the right, tool dock at bottom */
+:root{
+  --paper:#fbfaf6; --ink:#1f2328; --dock:#ffffff; --line:#e3e1d9; --accent:#2f6fde; --muted:#6b6f76; --check:#efede6;
+  --pad1:#ffffff; --pad2:#ecebe6; /* the tip pad is always light paper, in both themes */
+  --font:"Rubik",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--paper:#1c1d20;--ink:#e9e7e1;--dock:#2a2b2f;--line:#3a3b40;--accent:#6d9cf0;--muted:#9a9ca3;--check:#33343a;color-scheme:dark}}
+:root[data-theme="dark"]{--paper:#1c1d20;--ink:#e9e7e1;--dock:#2a2b2f;--line:#3a3b40;--accent:#6d9cf0;--muted:#9a9ca3;--check:#33343a;color-scheme:dark}
+[hidden]{display:none!important}
+html,body{height:100%;overflow:hidden}
+body{background:var(--paper);color:var(--ink);font-family:var(--font);
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
+#wrap{position:relative;height:100%}
+#stack{position:absolute;inset:0;touch-action:none;cursor:crosshair}
+#stack canvas{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+.top{position:absolute;top:10px;left:max(16px,env(safe-area-inset-left,0px));right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;justify-content:space-between;align-items:flex-start;gap:8px;pointer-events:none}
+.top>*{pointer-events:auto}
+.top .side{display:flex;gap:8px;flex-wrap:wrap}
+.pill{background:var(--dock);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;color:var(--muted);
+  display:flex;align-items:center;gap:8px;box-shadow:0 2px 10px rgb(0 0 0 / .06);min-height:32px}
+.pill b{color:var(--ink);font-weight:500}
+.pill label{display:flex;align-items:center;gap:6px;cursor:pointer}
+button.pill{height:auto;font-size:14px;color:var(--ink);border-radius:999px}
+.dock{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));
+  background:var(--dock);border:1px solid var(--line);border-radius:22px;padding:8px 10px;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;max-width:calc(100% - 32px);
+  box-shadow:0 8px 30px rgb(0 0 0 / .12);z-index:5}
+.grp{display:flex;align-items:center;gap:6px}
+.sep{width:1px;height:28px;background:var(--line)}
+button{font:inherit;color:var(--ink);background:transparent;border:1px solid transparent;border-radius:12px;
+  min-width:44px;height:44px;padding:0 10px;cursor:pointer;display:grid;place-items:center;font-size:14px}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.35;cursor:default}
+button.on{background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:var(--accent);color:var(--accent)}
+button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#brushBtn{display:flex;gap:6px;align-items:center;padding:0 12px}
+#brushBtn span{max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sw{width:30px;height:30px;min-width:30px;padding:0;border-radius:50%;border:2px solid var(--line)}
+.sw.on{border-color:var(--ink);box-shadow:0 0 0 2px var(--dock),0 0 0 4px var(--ink)}
+input[type=color]{width:34px;height:34px;border:none;background:none;padding:0;cursor:pointer}
+input[type=range]{width:110px;accent-color:var(--accent)}
+.size-dot{width:28px;height:28px;display:grid;place-items:center}
+.size-dot i{display:block;border-radius:50%;background:var(--ink)}
+
+/* shared panel shell */
+.panel{position:absolute;top:54px;max-width:calc(100% - 32px);max-height:calc(100% - 190px);background:var(--dock);
+  border:1px solid var(--line);border-radius:18px;box-shadow:0 8px 30px rgb(0 0 0 / .14);display:flex;flex-direction:column;overflow:hidden;z-index:4}
+.panel>header{display:flex;align-items:center;justify-content:space-between;padding:8px 8px 4px 12px;font-weight:500;flex:none}
+.panel>header .grp button{min-width:38px;height:38px}
+
+/* layers panel */
+#layers{right:max(16px,env(safe-area-inset-right,0px));width:260px}
+#lyList{overflow-y:auto;padding:4px 8px;display:flex;flex-direction:column;gap:4px}
+.ly{display:flex;align-items:center;gap:8px;padding:6px;border-radius:12px;border:1px solid transparent;cursor:pointer}
+.ly.sel{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.ly canvas{width:54px;height:40px;border-radius:6px;border:1px solid var(--line);flex:none;
+  background:repeating-conic-gradient(var(--check) 0 25%,var(--paper) 0 50%) 0 0/10px 10px}
+.ly input{flex:1;min-width:0;font:inherit;font-size:14px;color:var(--ink);background:transparent;border:1px solid transparent;border-radius:8px;padding:4px 6px;-webkit-user-select:text;user-select:text}
+.ly input:focus{border-color:var(--line);outline:none;background:var(--paper)}
+.ly .eye{min-width:36px;height:36px;padding:0;color:var(--muted)}
+.ly.hid .eye{color:var(--line)}
+.ly.hid canvas{opacity:.35}
+#layers footer{border-top:1px solid var(--line);padding:8px 12px;display:grid;gap:6px;font-size:13px;color:var(--muted)}
+#layers footer .row{display:flex;align-items:center;gap:8px}
+#layers footer input[type=range]{flex:1;width:auto}
+#layers footer .row button{min-width:0;height:36px;flex:1;border:1px solid var(--line);font-size:13px}
+
+/* brush panel */
+#brushes{left:max(16px,env(safe-area-inset-left,0px));width:310px}
+#brushes .scroll{overflow-y:auto;padding:0 12px 12px;display:grid;gap:12px}
+.lib{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.bt{position:relative;display:grid;gap:2px;padding:6px;border:1px solid var(--line);border-radius:12px;cursor:pointer;text-align:start;background:transparent}
+.bt.sel{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.bt canvas{width:100%;height:36px;display:block}
+.bt span{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt .x{position:absolute;top:2px;left:2px;min-width:26px;height:26px;padding:0 6px;font-size:12px;border-radius:8px;color:var(--muted)}
+.bt .x.armed{color:#fff;background:#e5484d}
+.sec{font-size:12px;letter-spacing:.06em;color:var(--muted);font-weight:500;margin-top:4px;display:flex;align-items:center;gap:8px}
+.sec::after{content:"";flex:1;height:1px;background:var(--line)}
+.pvrow{display:flex;gap:8px}
+#prev,#tipView{height:96px;border-radius:12px;border:1px solid var(--line);
+  background:repeating-conic-gradient(var(--check) 0 25%,var(--paper) 0 50%) 0 0/12px 12px}
+#prev{flex:1;min-width:0;width:100%}
+#tipView{width:96px;flex:none}
+.ctl{display:grid;grid-template-columns:96px minmax(0,1fr) 44px;align-items:center;gap:8px;font-size:13px}
+.ctl input[type=range]{width:100%}
+.ctl output{font-variant-numeric:tabular-nums;color:var(--muted);text-align:start;font-size:12px}
+.seg{display:flex;gap:4px;flex-wrap:wrap}
+.seg button{height:32px;min-width:0;padding:0 10px;border:1px solid var(--line);font-size:13px;border-radius:9px}
+.segrow{display:grid;grid-template-columns:96px minmax(0,1fr);align-items:center;gap:8px;font-size:13px}
+#brushes footer{border-top:1px solid var(--line);padding:8px 12px;display:grid;gap:6px;flex:none}
+#brushes footer .row{display:flex;gap:6px}
+#brushes footer input{flex:1;min-width:0;font:inherit;font-size:14px;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:0 10px;height:38px;-webkit-user-select:text;user-select:text}
+#brushes footer button{height:38px;border:1px solid var(--line);font-size:13px}
+#brushName2 em{font-style:normal;color:var(--accent);font-size:12px}
+
+/* brush-tip editor */
+#tipEditor{position:absolute;inset:0;background:rgb(0 0 0 / .5);display:grid;place-items:center;z-index:10;
+  padding:16px max(16px,env(safe-area-inset-right,0px)) 16px max(16px,env(safe-area-inset-left,0px))}
+.te{background:var(--dock);border-radius:20px;padding:16px;display:grid;gap:12px;width:min(660px,100%);max-height:100%;overflow:auto}
+.te h2{margin:0;font-size:18px;font-weight:500}
+.te p.sub{margin:0;font-size:13px;color:var(--muted)}
+.te-body{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:16px;align-items:start}
+.padwrap{position:relative}
+#tePad{width:100%;aspect-ratio:1;max-width:100%;display:block;border-radius:14px;border:1px solid var(--line);touch-action:none;
+  background:repeating-conic-gradient(var(--pad2) 0 25%,var(--pad1) 0 50%) 0 0/16px 16px}
+.hint{position:absolute;inset:0;display:grid;place-items:center;color:#6b6f76;pointer-events:none;font-size:14px;text-align:center;padding:24px}
+.te-side{display:grid;gap:10px;font-size:13px}
+.te-side .seg button{height:34px}
+.te-row{display:flex;gap:6px;flex-wrap:wrap}
+.te-row button{height:38px;border:1px solid var(--line);font-size:13px;min-width:0}
+.te-res{display:flex;gap:10px;align-items:center}
+#teMask{width:84px;height:84px;flex:none;border:1px solid var(--line);border-radius:10px;
+  background:repeating-conic-gradient(var(--check) 0 25%,var(--paper) 0 50%) 0 0/12px 12px}
+#tePrev{width:100%;height:84px;min-width:0;border:1px solid var(--line);border-radius:10px;
+  background:repeating-conic-gradient(var(--check) 0 25%,var(--paper) 0 50%) 0 0/12px 12px}
+.te input[type=text]{font:inherit;font-size:14px;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:0 10px;height:40px;-webkit-user-select:text;user-select:text;min-width:0;flex:1}
+.te footer{display:flex;gap:8px;flex-wrap:wrap}
+.te footer button{height:42px;border:1px solid var(--line)}
+@media (max-width:600px){.te-body{grid-template-columns:1fr}}
+
+/* dragging + snapping */
+.panel>header{cursor:grab;touch-action:none;position:relative;padding-top:14px}
+.panel>header::before{content:"";position:absolute;top:5px;left:50%;width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line)}
+.grip{min-width:28px;width:28px;padding:0;cursor:grab;touch-action:none;color:var(--muted)}
+.grip svg{fill:currentColor;stroke:none}
+.dragging{cursor:grabbing!important;box-shadow:0 14px 40px rgb(0 0 0 / .22)!important;transition:none!important}
+.dragging>header{cursor:grabbing}
+.snapping{outline:2px solid var(--accent);outline-offset:2px}
+.placed{transition:left .18s ease,top .18s ease,right .18s ease,bottom .18s ease}
+@media (prefers-reduced-motion:reduce){.placed{transition:none}}
+
+#toast{position:absolute;top:60px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);
+  padding:8px 14px;border-radius:999px;font-size:14px;pointer-events:none;z-index:9}
+#saveBox{position:absolute;inset:0;background:rgb(0 0 0 / .55);display:grid;place-items:center;z-index:10;
+  padding:24px max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe-area-inset-left,0px))}
+#saveBox .card{background:var(--dock);border-radius:18px;padding:16px;max-width:min(720px,100%);display:grid;gap:12px;text-align:center}
+#saveBox img{border-radius:10px;border:1px solid var(--line);max-height:60vh;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto}
+#saveBox p{margin:0;font-size:15px}
+@media (max-width:560px){input[type=range]{width:80px}.sep{display:none}#status{display:none}}
+</style>
+</head>
+<body>
+
+
+<div id="wrap" dir="rtl">
+  <div id="stack" aria-label="משטח ציור"></div>
+
+  <div class="top">
+    <div class="side">
+      <button class="pill on" id="lyToggle" aria-expanded="true">שכבות · <b id="lyName">שכבה 2</b></button>
+      <div class="pill" id="status">עט: <b id="penState">לא זוהה עדיין</b> · לחץ <b id="pr">–</b></div>
+    </div>
+    <div class="pill"><label><input type="checkbox" id="penOnly" checked> רק עט</label></div>
+  </div>
+
+  <aside id="layers" class="panel" aria-label="שכבות">
+    <header>
+      <span>שכבות</span>
+      <div class="grp">
+        <button id="lyAdd" title="שכבה חדשה" aria-label="שכבה חדשה"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button id="lyDup" title="שכפל שכבה" aria-label="שכפל שכבה"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 00-1-1H5a1 1 0 00-1 1v10a1 1 0 001 1h3"/></svg></button>
+        <button id="lyDel" title="מחק שכבה" aria-label="מחק שכבה"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+      </div>
+    </header>
+    <div id="lyList"></div>
+    <footer>
+      <div class="row"><span>שקיפות</span><input type="range" id="lyOp" min="0" max="100" value="100" aria-label="שקיפות שכבה"><b id="lyOpV">100%</b></div>
+      <div class="row">
+        <button id="lyUp">הזז למעלה</button>
+        <button id="lyDown">הזז למטה</button>
+        <button id="lyMerge">מזג למטה</button>
+      </div>
+    </footer>
+  </aside>
+
+  <aside id="brushes" class="panel" aria-label="מברשות">
+    <header>
+      <span id="brushName2">מברשת</span>
+      <div class="grp"><button id="brClose" aria-label="סגור"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    </header>
+    <div class="scroll">
+      <div class="lib" id="lib"></div>
+      <div class="pvrow">
+        <canvas id="tipView" aria-label="ראש המברשת – נגיעה אחת"></canvas>
+        <canvas id="prev" aria-label="תצוגה מקדימה של המברשת"></canvas>
+      </div>
+      <div id="ctls" style="display:grid;gap:8px"></div>
+    </div>
+    <footer>
+      <div class="row"><button id="teOpen" style="flex:1">✎ ראש מברשת מציור</button></div>
+      <div class="row">
+        <button id="brReset" hidden>אפס שינויים</button>
+        <button id="brUpdate" hidden>עדכן מברשת</button>
+      </div>
+      <div class="row">
+        <input id="brNewName" placeholder="שם למברשת חדשה" maxlength="24" aria-label="שם למברשת חדשה">
+        <button id="brSave">שמור כמברשת</button>
+      </div>
+    </footer>
+  </aside>
+
+  <div class="dock" role="toolbar" aria-label="כלי ציור">
+    <button class="grip" id="dockGrip" aria-label="גרור את סרגל הכלים" title="גרור"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button>
+    <div class="grp">
+      <button id="brushBtn" class="on" aria-expanded="true" title="מברשות"><svg viewBox="0 0 24 24"><path d="M14 4l6 6-8 8H6v-6z"/><path d="M4 20c1-3 2-4 4-4"/></svg><span id="brushName">דיו</span></button>
+      <button id="tEraser" title="מחק" aria-label="מחק"><svg viewBox="0 0 24 24"><path d="M3 17l8-8 7 7-4 4H7z"/><path d="M14 20h7"/></svg></button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp" id="swatches"></div>
+    <input type="color" id="custom" value="#8a3ffc" aria-label="צבע מותאם">
+    <div class="sep"></div>
+    <div class="grp">
+      <div class="size-dot"><i id="dot"></i></div>
+      <input type="range" id="size" min="1" max="120" value="9" aria-label="עובי">
+    </div>
+    <div class="sep"></div>
+    <div class="grp">
+      <button id="undo" title="בטל" aria-label="בטל"><svg viewBox="0 0 24 24"><path d="M9 14l-5-5 5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
+      <button id="redo" title="חזור" aria-label="חזור"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg></button>
+      <button id="clear">נקה שכבה</button>
+      <button id="save">שמור</button>
+    </div>
+  </div>
+
+  <div id="tipEditor" hidden>
+    <div class="te" role="dialog" aria-label="ראש מברשת חדש">
+      <div>
+        <h2>ראש מברשת חדש</h2>
+        <p class="sub">כל מה שמצויר כאן הופך לחותמת שהמברשת מטביעה לאורך הקו. אזורים כהים או מלאים = צבע, ריק או לבן = שקוף.</p>
+      </div>
+      <div class="te-body">
+        <div class="padwrap">
+          <canvas id="tePad" width="512" height="512" aria-label="משטח לציור ראש המברשת"></canvas>
+          <div class="hint" id="teHint">צייר כאן צורה, כוכב, עלה, שריטות…<br>או טען מהשכבה / מתמונה</div>
+        </div>
+        <div class="te-side">
+          <div class="segrow"><span>כלי</span><div class="seg" id="teTool">
+            <button data-v="pen" class="on">עט</button><button data-v="erase">מחק</button></div></div>
+          <div class="segrow"><span>עובי</span><div class="seg" id="teSize">
+            <button data-v="5">דק</button><button data-v="14" class="on">בינוני</button><button data-v="36">עבה</button></div></div>
+          <div class="te-row">
+            <button id="teLayer">מהשכבה הנוכחית</button>
+            <button id="teFileBtn">מתמונה…</button>
+            <input type="file" id="teFile" accept="image/*" hidden>
+            <button id="teInvert">הפוך</button>
+            <button id="teClear">נקה</button>
+          </div>
+          <span class="sec">התוצאה</span>
+          <div class="te-res">
+            <canvas id="teMask" aria-label="ראש המברשת"></canvas>
+            <canvas id="tePrev" aria-label="קו לדוגמה"></canvas>
+          </div>
+        </div>
+      </div>
+      <footer>
+        <input type="text" id="teName" placeholder="שם למברשת" maxlength="24" aria-label="שם למברשת">
+        <button id="teCreate" class="on">צור מברשת</button>
+        <button id="teCancel">ביטול</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <div id="saveBox" hidden>
+    <div class="card">
+      <img id="saveImg" alt="הציור שלך">
+      <p>לחיצה ארוכה על התמונה ← "שמור בתמונות"</p>
+      <button id="closeSave" class="on">סגור</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(()=>{
+const $=id=>document.getElementById(id);
+const stack=$('stack');
+const COLORS=['#1f2328','#e5484d','#f5a524','#30a46c','#2f6fde','#ffffff'];
+let color=COLORS[0], erasing=false, dpr=1;
+
+// =================== BRUSH ENGINE ===================
+const DEF={size:6,opacity:100,flow:100,softness:0,spacing:5,shape:'round',roundness:100,angle:0,angleSrc:'fixed',
+  grain:0,overlap:100,scatter:0,sizeJitter:0,angleJitter:0,pSize:70,pOpacity:0,minSize:10,smoothing:20};
+const PRESETS=[
+  {id:'round',name:'עגול בסיסי',size:30,softness:0,spacing:4,pSize:0,pOpacity:0,minSize:100,smoothing:15},
+  {id:'pencil',name:'עיפרון',size:4,opacity:90,flow:60,softness:30,spacing:10,shape:'chalk',grain:45,pSize:50,pOpacity:80,minSize:30,angleJitter:100,smoothing:15},
+  {id:'ink',name:'דיו',size:9,softness:3,spacing:3,pSize:100,minSize:5,smoothing:35},
+  {id:'pen',name:'עט טכני',size:4,softness:0,spacing:3,pSize:25,minSize:60,smoothing:40},
+  {id:'marker',name:'מרקר',size:20,opacity:55,overlap:20,softness:10,spacing:4,roundness:35,angle:45,pSize:0,smoothing:20},
+  {id:'air',name:'מכחול רך',size:70,flow:8,softness:100,spacing:8,pSize:20,pOpacity:100,minSize:20,smoothing:10},
+  {id:'water',name:'צבעי מים',size:45,opacity:60,flow:12,softness:70,spacing:8,grain:40,sizeJitter:30,scatter:6,pSize:40,pOpacity:50},
+  {id:'chalk',name:'גיר',size:22,flow:80,softness:30,spacing:12,shape:'chalk',grain:75,angleJitter:100,pSize:40,pOpacity:50,smoothing:10},
+  {id:'spray',name:'ספריי',size:45,flow:70,spacing:20,shape:'spray',scatter:15,angleJitter:100,pSize:20,pOpacity:60,smoothing:0},
+  {id:'callig',name:'קליגרפיה',size:18,spacing:2,roundness:18,angle:40,pSize:60,minSize:20,smoothing:30},
+  {id:'square',name:'מכחול מרובע',size:24,softness:15,spacing:6,shape:'square',angleSrc:'direction',pSize:40,pOpacity:30,grain:20}
+];
+function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const hash=(x,y)=>{const s=Math.sin(x*127.1+y*311.7)*43758.5453;return s-Math.floor(s);};
+
+const maskCache=new Map(), tipCache=new Map();
+function mask(shape,soft,grain){
+  const key=shape+'|'+soft+'|'+grain; if(maskCache.has(key))return maskCache.get(key);
+  const N=256,c=document.createElement('canvas');c.width=c.height=N;const x=c.getContext('2d');const rng=mulberry(9001);
+  if(shape==='spray'){
+    x.fillStyle='#fff';
+    for(let i=0;i<80;i++){let dx,dy;do{dx=rng()*2-1;dy=rng()*2-1;}while(dx*dx+dy*dy>1);
+      x.globalAlpha=0.5+0.5*rng();x.beginPath();x.arc(128+dx*116,128+dy*116,3+rng()*5,0,7);x.fill();}
+  }else{
+    // Feather: softness = how much of the radius is a gradient. 0 = crisp edge (1.5px anti-alias), 100 = gradient from the centre.
+    const img=x.createImageData(N,N),d=img.data,g=grain/100;
+    const fw=Math.max(3/N,soft/100); // feather width as a fraction of the radius
+    for(let py=0;py<N;py++)for(let px=0;px<N;px++){
+      const nx=(px+.5)/N*2-1,ny=(py+.5)/N*2-1;
+      const dist=shape==='square'?Math.max(Math.abs(nx),Math.abs(ny)):Math.hypot(nx,ny);
+      let a=Math.min(1,Math.max(0,(1-dist)/fw));
+      if(soft>=3){a=a*a*(3-2*a);a=Math.pow(a,1+soft/100);} // eased feather that gets airier as softness rises; linear AA for the hard edge
+      if(shape==='chalk'){if(hash(px/6|0,py/6|0)<Math.max(g,.5)*.7)a*=.06;}
+      else if(g>0)a*=1-g*rng();
+      const i=(py*N+px)*4;d[i]=d[i+1]=d[i+2]=255;d[i+3]=a*255;
+    }
+    x.putImageData(img,0,0);
+  }
+  maskCache.set(key,c);return c;
+}
+const tipMasks=new Map(); // custom tips drawn by the user: tipId -> 128px white+alpha canvas
+function loadTip(id,data,cb){const im=new Image();im.onload=()=>{const c=document.createElement('canvas');c.width=c.height=128;
+  c.getContext('2d').drawImage(im,0,0,128,128);tipMasks.set(id,c);cb&&cb();};im.src=data;}
+// ---- Stroke buffers ----
+// A stroke is built in a greyscale buffer (black = empty, white = full) with the 'lighten' blend, so where dabs
+// overlap each pixel keeps the strongest dab instead of piling up. That keeps the tip's feather visible
+// along the whole stroke. Flow < 100 makes each dab move only part of the way up, so paint builds up.
+// The grey is then turned into colour + alpha for the dirty area only.
+function tip(b,col){ // coloured tip, used for the single-dab view
+  const custom=b.shape==='custom'&&tipMasks.has(b.tipId);
+  const key=(custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain)+'|'+col;if(tipCache.has(key))return tipCache.get(key);
+  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain),c=document.createElement('canvas');c.width=c.height=m.width;
+  const x=c.getContext('2d');x.drawImage(m,0,0);x.globalCompositeOperation='source-in';x.fillStyle=col;x.fillRect(0,0,c.width,c.height);
+  if(tipCache.size>80)tipCache.clear();tipCache.set(key,c);return c;
+}
+const grayCache=new Map();
+function grayTip(b,lvl){ // opaque: black background, tip brightness = mask × level/16
+  const custom=b.shape==='custom'&&tipMasks.has(b.tipId);
+  const key=(custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain)+'|'+lvl;if(grayCache.has(key))return grayCache.get(key);
+  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain);
+  const c=document.createElement('canvas');c.width=c.height=m.width;const x=c.getContext('2d');
+  x.fillStyle='#000';x.fillRect(0,0,c.width,c.height);x.globalAlpha=lvl/16;x.drawImage(m,0,0);
+  if(grayCache.size>200)grayCache.clear();grayCache.set(key,c);return c;
+}
+function makeBuf(w,h){
+  const g=document.createElement('canvas');g.width=w;g.height=h;
+  const gx=g.getContext('2d',{willReadFrequently:true});gx.fillStyle='#000';gx.fillRect(0,0,w,h);
+  return{g,gx,used:null};
+}
+function sizeBuf(buf,w,h){buf.g.width=w;buf.g.height=h;buf.gx=buf.g.getContext('2d',{willReadFrequently:true});
+  buf.gx.fillStyle='#000';buf.gx.fillRect(0,0,w,h);buf.used=null;}
+function resetBuf(buf){ // wipe only what the previous stroke touched
+  const u=buf.used;if(u){buf.gx.setTransform(1,0,0,1,0,0);buf.gx.globalAlpha=1;buf.gx.globalCompositeOperation='source-over';
+    buf.gx.fillStyle='#000';buf.gx.fillRect(u.x0,u.y0,u.x1-u.x0,u.y1-u.y0);}
+  buf.used=null;
+}
+const rgbCache=new Map(),rgbCv=document.createElement('canvas');rgbCv.width=rgbCv.height=1;
+function rgb(col){if(rgbCache.has(col))return rgbCache.get(col);const x=rgbCv.getContext('2d',{willReadFrequently:true});
+  x.clearRect(0,0,1,1);x.fillStyle=col;x.fillRect(0,0,1,1);const d=x.getImageData(0,0,1,1).data,v=[d[0],d[1],d[2]];rgbCache.set(col,v);return v;}
+// Paints the stroke (grey buffer) onto target inside rect r, reading the pixels underneath from base.
+// Overlap (0–100) decides what happens where the stroke crosses paint already on the layer:
+//   100 = normal glazing, each pass darkens;  0 = paint only tops up to the stroke's own opacity, never darker.
+function composite(buf,r,s,target,base){
+  if(!r)return;const W=buf.g.width,H=buf.g.height;
+  const x0=Math.max(0,Math.floor(r.x0)),y0=Math.max(0,Math.floor(r.y0)),x1=Math.min(W,Math.ceil(r.x1)),y1=Math.min(H,Math.ceil(r.y1));
+  const w=x1-x0,h=y1-y0;if(w<=0||h<=0)return;
+  const g=buf.gx.getImageData(x0,y0,w,h).data,img=base.getImageData(x0,y0,w,h),d=img.data;
+  const op=s.b.opacity/100/255,t=(s.b.overlap??100)/100,[R,G,Bc]=rgb(s.erase?'#000':s.color);
+  for(let i=0;i<d.length;i+=4){
+    const sa=g[i]*op;if(sa<=0)continue;
+    const da=d[i+3]/255;
+    if(s.erase){d[i+3]=Math.round(da*(1-sa)*255);continue;}
+    const e=da>=1?0:Math.max(0,(sa-da)/(1-da));      // just enough to reach max(da, sa)
+    const ea=t*sa+(1-t)*e;if(ea<=0)continue;
+    const A=ea+da*(1-ea),k=da*(1-ea);
+    d[i]=(R*ea+d[i]*k)/A;d[i+1]=(G*ea+d[i+1]*k)/A;d[i+2]=(Bc*ea+d[i+2]*k)/A;d[i+3]=A*255;
+  }
+  target.putImageData(img,x0,y0);
+  const u=buf.used;buf.used=u?{x0:Math.min(u.x0,x0),y0:Math.min(u.y0,y0),x1:Math.max(u.x1,x1),y1:Math.max(u.y1,y1)}:{x0,y0,x1,y1};
+}
+// Places dabs along a stroke. Deterministic for a given stroke (seeded), so undo/redraw reproduces it exactly.
+function stamper(buf,s,scale){
+  const ctx=buf.gx,b=s.b,rng=mulberry(s.seed);
+  const rd=b.roundness/100,baseAng=b.angle*Math.PI/180;let rem=0,dirty=null;
+  const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-p));
+  function stamp(x,y,p,az,dir){
+    const sz=b.size*pf(p)*(1-b.sizeJitter/100*rng());
+    const lvl=Math.max(1,Math.round(16*(1-b.pOpacity/100*(1-p))));
+    const ang=baseAng+(b.angleSrc==='direction'?dir:(b.angleSrc==='tilt'&&az!=null?az:0))+(rng()-.5)*2*Math.PI*b.angleJitter/100;
+    if(b.scatter){const rr=b.scatter/100*b.size*rng(),th=rng()*2*Math.PI;x+=Math.cos(th)*rr;y+=Math.sin(th)*rr;}
+    const r=Math.max(.35,sz/2)*scale,c=Math.cos(ang),si=Math.sin(ang),cx=x*scale,cy=y*scale,e=r*1.42+2;
+    ctx.globalAlpha=Math.min(1,Math.max(.01,b.flow/100));
+    ctx.setTransform(c,si,-si*rd,c*rd,cx,cy);
+    ctx.drawImage(grayTip(b,lvl),-r,-r,2*r,2*r);
+    dirty=dirty?{x0:Math.min(dirty.x0,cx-e),y0:Math.min(dirty.y0,cy-e),x1:Math.max(dirty.x1,cx+e),y1:Math.max(dirty.y1,cy+e)}:{x0:cx-e,y0:cy-e,x1:cx+e,y1:cy+e};
+  }
+  return{
+    first(p){ctx.globalCompositeOperation='lighten';stamp(p.x,p.y,p.p,p.az,0);ctx.setTransform(1,0,0,1,0,0);},
+    seg(a,q){
+      const dx=q.x-a.x,dy=q.y-a.y,dist=Math.hypot(dx,dy);if(dist<.01)return;
+      const dir=Math.atan2(dy,dx);let tt=0,carry=rem;
+      ctx.globalCompositeOperation='lighten';
+      while(true){
+        const f0=tt/dist,p0=a.p+(q.p-a.p)*f0;
+        const step=Math.max(.5,b.spacing/100*b.size*pf(p0)),need=step-carry;
+        if(tt+need>dist){carry+=dist-tt;break;}
+        tt+=need;carry=0;const f=tt/dist;
+        stamp(a.x+dx*f,a.y+dy*f,a.p+(q.p-a.p)*f,q.az,dir);
+      }
+      rem=carry;ctx.setTransform(1,0,0,1,0,0);
+    },
+    take(){const d=dirty;dirty=null;return d;}
+  };
+}
+function renderStroke(target,s,scale,buf){
+  resetBuf(buf);
+  const st=stamper(buf,s,scale);st.first(s.pts[0]);for(let i=1;i<s.pts.length;i++)st.seg(s.pts[i-1],s.pts[i]);
+  composite(buf,st.take(),s,target,target);
+}
+
+// =================== LAYERS ===================
+let layers=[],active=null,nextNum=1,history=[],future=[],cur=null,activeId=null,st=null,lastRaw=null;
+const snap=document.createElement('canvas');let snapX=snap.getContext('2d',{willReadFrequently:true});
+const liveBuf=makeBuf(1,1),redrawBuf=makeBuf(1,1);
+function makeLayer(name,strokes=[]){const c=document.createElement('canvas');
+  return{name:name||('שכבה '+nextNum++),canvas:c,ctx:c.getContext('2d',{willReadFrequently:true}),strokes,visible:true,opacity:1,thumb:null};}
+function fit(c){const r=stack.getBoundingClientRect();c.width=Math.round(r.width*dpr);c.height=Math.round(r.height*dpr);}
+function mount(){
+  layers.forEach((L,i)=>{L.canvas.style.zIndex=i*2;L.canvas.style.opacity=L.opacity;L.canvas.hidden=!L.visible;
+    if(L.canvas.parentNode!==stack)stack.appendChild(L.canvas);});
+  [...stack.children].forEach(c=>{if(!layers.some(L=>L.canvas===c))c.remove();});
+}
+function insertLayer(L,i){fit(L.canvas);layers.splice(i,0,L);mount();redrawLayer(L);}
+function removeLayer(L){layers.splice(layers.indexOf(L),1);mount();}
+const idx=L=>layers.indexOf(L);
+function redrawLayer(L){
+  const c=L.ctx;c.setTransform(1,0,0,1,0,0);c.globalCompositeOperation='source-over';c.globalAlpha=1;
+  c.clearRect(0,0,L.canvas.width,L.canvas.height);
+  L.strokes.forEach(s=>renderStroke(c,s,dpr,redrawBuf));updThumb(L);
+}
+function fitBufs(){const r=stack.getBoundingClientRect(),w=Math.round(r.width*dpr),h=Math.round(r.height*dpr);sizeBuf(liveBuf,w,h);sizeBuf(redrawBuf,w,h);fit(snap);snapX=snap.getContext('2d',{willReadFrequently:true});}
+function resize(){dpr=window.devicePixelRatio||1;fitBufs();layers.forEach(L=>{fit(L.canvas);redrawLayer(L);});}
+window.addEventListener('resize',resize);
+
+// history
+function push(a){history.push(a);future=[];updUndo();}
+function apply(a,dir){
+  const L=a.layer;
+  switch(a.type){
+    case'stroke':dir>0?L.strokes.push(a.stroke):L.strokes.pop();redrawLayer(L);break;
+    case'clear':L.strokes=dir>0?[]:a.strokes.slice();redrawLayer(L);break;
+    case'add':if(dir>0){insertLayer(L,a.index);active=L;}else{removeLayer(L);if(active===L)active=layers[Math.max(0,a.index-1)];}break;
+    case'delete':if(dir>0){removeLayer(L);if(active===L)active=layers[Math.max(0,a.index-1)];}else{insertLayer(L,a.index);active=L;}break;
+    case'move':{const f=dir>0?a.from:a.to,t=dir>0?a.to:a.from;layers.splice(f,1);layers.splice(t,0,L);mount();break;}
+    case'merge':{const B=a.below;
+      if(dir>0){B.strokes=a.mergedStrokes;removeLayer(L);active=B;}else{B.strokes=a.belowStrokes;insertLayer(L,a.index);active=L;}
+      redrawLayer(B);break;}
+  }
+  renderLayers();
+}
+$('undo').onclick=()=>{const a=history.pop();if(a){apply(a,-1);future.push(a);updUndo();}};
+$('redo').onclick=()=>{const a=future.pop();if(a){apply(a,1);history.push(a);updUndo();}};
+function updUndo(){$('undo').disabled=!history.length;$('redo').disabled=!future.length;}
+
+// =================== INPUT ===================
+const penOnly=$('penOnly');let penSeen=false;
+function allowed(e){
+  if(e.pointerType==='pen'){if(!penSeen){penSeen=true;$('penState').textContent='מחובר ✓';}return true;}
+  if(e.pointerType==='touch')return!(penOnly.checked&&penSeen);
+  return true;
+}
+function raw(e){
+  const r=stack.getBoundingClientRect();
+  let p=e.pointerType==='pen'?e.pressure:0.6, az=null;
+  if(typeof e.azimuthAngle==='number'&&e.pointerType==='pen')az=e.azimuthAngle;
+  else if(e.tiltX||e.tiltY)az=Math.atan2(e.tiltY,e.tiltX);
+  return{x:e.clientX-r.left,y:e.clientY-r.top,p,az};
+}
+function smooth(q){ // streamline: lag the point toward the pen
+  const pts=cur.pts,last=pts[pts.length-1],k=cur.b.smoothing/100*.9;
+  return{x:last.x+(q.x-last.x)*(1-k),y:last.y+(q.y-last.y)*(1-k),p:last.p+(q.p-last.p)*(1-k*.5),az:q.az};
+}
+function liveUpdate(){composite(liveBuf,st.take(),cur,active.ctx,snapX);}
+stack.addEventListener('pointerdown',e=>{
+  if(!allowed(e)||activeId!==null)return;
+  e.preventDefault();
+  if(!active.visible){toast('השכבה מוסתרת – הפעל את העין כדי לצייר');return;}
+  activeId=e.pointerId;stack.setPointerCapture(e.pointerId);
+  const p=raw(e);lastRaw=p;
+  cur={b:{...B},color,erase:erasing,seed:(Math.random()*2**31)|0,pts:[p]};
+  resetBuf(liveBuf);
+  snapX.setTransform(1,0,0,1,0,0);snapX.globalAlpha=1;snapX.globalCompositeOperation='copy';snapX.drawImage(active.canvas,0,0);snapX.globalCompositeOperation='source-over';
+  st=stamper(liveBuf,cur,dpr);st.first(p);liveUpdate();
+});
+stack.addEventListener('pointermove',e=>{
+  if(e.pointerType==='pen')$('pr').textContent=Math.round(e.pressure*100)+'%';
+  if(e.pointerId!==activeId||!cur)return;
+  e.preventDefault();
+  const evs=e.getCoalescedEvents?e.getCoalescedEvents():[];
+  for(const ev of(evs.length?evs:[e])){
+    const r=raw(ev);lastRaw=r;const q=smooth(r);
+    st.seg(cur.pts[cur.pts.length-1],q);cur.pts.push(q);
+  }
+  liveUpdate();
+});
+function end(e){
+  if(e.pointerId!==activeId)return;activeId=null;
+  if(!cur)return;
+  // let the smoothed line catch up to where the pen lifted
+  if(cur.b.smoothing>0&&lastRaw&&cur.pts.length>1){const q={...lastRaw,p:cur.pts[cur.pts.length-1].p};st.seg(cur.pts[cur.pts.length-1],q);cur.pts.push(q);}
+  liveUpdate();
+  active.strokes.push(cur);push({type:'stroke',layer:active,stroke:cur});updThumb(active);cur=null;st=null;
+}
+stack.addEventListener('pointerup',end);stack.addEventListener('pointercancel',end);
+['touchstart','touchmove','gesturestart'].forEach(t=>stack.addEventListener(t,e=>e.preventDefault(),{passive:false}));
+
+// =================== LAYERS PANEL ===================
+const list=$('lyList');
+function updThumb(L){if(!L.thumb)return;const t=L.thumb,c=t.getContext('2d');c.clearRect(0,0,t.width,t.height);
+  if(L.canvas.width)c.drawImage(L.canvas,0,0,t.width,t.height);}
+function renderLayers(){
+  list.innerHTML='';
+  [...layers].reverse().forEach(L=>{
+    const row=document.createElement('div');row.className='ly'+(L===active?' sel':'')+(L.visible?'':' hid');
+    const eye=document.createElement('button');eye.className='eye';eye.setAttribute('aria-label',L.visible?'הסתר שכבה':'הצג שכבה');
+    eye.innerHTML=L.visible?'<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>'
+      :'<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A10 10 0 0112 6c6 0 10 6 10 6a17 17 0 01-3 3.6M6.6 6.6C3.8 8.4 2 12 2 12s4 7 10 7c1.6 0 3-.4 4.3-1"/></svg>';
+    eye.onclick=ev=>{ev.stopPropagation();L.visible=!L.visible;mount();renderLayers();};
+    const t=document.createElement('canvas');t.width=108;t.height=80;L.thumb=t;
+    const name=document.createElement('input');name.value=L.name;name.setAttribute('aria-label','שם השכבה');
+    name.onchange=()=>{L.name=name.value.trim()||L.name;renderLayers();};
+    name.onkeydown=ev=>{if(ev.key==='Enter')name.blur();};
+    row.append(eye,t,name);
+    row.onclick=ev=>{if(ev.target===name&&L===active)return;active=L;renderLayers();};
+    list.appendChild(row);updThumb(L);
+  });
+  const i=idx(active);
+  $('lyName').textContent=active.name;
+  $('lyOp').value=Math.round(active.opacity*100);$('lyOpV').textContent=Math.round(active.opacity*100)+'%';
+  $('lyUp').disabled=i>=layers.length-1;$('lyDown').disabled=i<=0;$('lyMerge').disabled=i<=0;$('lyDel').disabled=layers.length<=1;
+}
+$('lyAdd').onclick=()=>{const L=makeLayer();const a={type:'add',layer:L,index:idx(active)+1};apply(a,1);push(a);};
+$('lyDup').onclick=()=>{const L=makeLayer(active.name+' עותק',active.strokes.slice());L.opacity=active.opacity;
+  const a={type:'add',layer:L,index:idx(active)+1};apply(a,1);push(a);};
+$('lyDel').onclick=()=>{if(layers.length<=1)return;const a={type:'delete',layer:active,index:idx(active)};apply(a,1);push(a);toast('השכבה נמחקה – אפשר לבטל');};
+function move(d){const f=idx(active),t=f+d;if(t<0||t>=layers.length)return;const a={type:'move',layer:active,from:f,to:t};apply(a,1);push(a);}
+$('lyUp').onclick=()=>move(1);$('lyDown').onclick=()=>move(-1);
+$('lyMerge').onclick=()=>{const i=idx(active);if(i<=0)return;const Bl=layers[i-1];
+  if(active.opacity<1||Bl.opacity<1)toast('במיזוג השקיפות של השכבה העליונה לא נשמרת');
+  const a={type:'merge',layer:active,below:Bl,index:i,belowStrokes:Bl.strokes.slice(),mergedStrokes:Bl.strokes.concat(active.strokes)};apply(a,1);push(a);};
+$('lyOp').oninput=e=>{active.opacity=e.target.value/100;$('lyOpV').textContent=e.target.value+'%';mount();};
+
+// =================== BRUSH PANEL ===================
+let B={...DEF,...PRESETS[0]},bid='round',modified=false,customs=[];
+try{customs=JSON.parse(localStorage.getItem('pencil-brushes')||'[]');}catch(e){customs=[];}
+function persist(){try{localStorage.setItem('pencil-brushes',JSON.stringify(customs));}catch(e){toast('לא הצלחתי לשמור את המברשות בדפדפן');}}
+const allBrushes=()=>PRESETS.concat(customs);
+const SPEC=[
+  ['g','בסיס'],
+  ['size','גודל',1,120,'px'],['opacity','שקיפות',1,100,'%'],['flow','זרימה',1,100,'%'],
+  ['softness','רכות',0,100,'%'],['spacing','מרווח',1,100,'%'],
+  ['g','צורה'],
+  ['shape','צורת קצה',[['round','עגול'],['square','מרובע'],['chalk','גיר'],['spray','ספריי'],['custom','ציור']]],
+  ['roundness','עגלגלות',5,100,'%'],['angle','זווית',0,180,'°'],
+  ['angleSrc','הזווית לפי',[['fixed','קבועה'],['direction','כיוון הקו'],['tilt','הטיית העט']]],
+  ['grain','גרעיניות',0,100,'%'],
+  ['g','אקראיות'],
+  ['scatter','פיזור',0,200,'%'],['sizeJitter','שינוי גודל',0,100,'%'],['angleJitter','סיבוב',0,100,'%'],
+  ['g','חפיפה בין קווים'],
+  ['overlap','הכהיה בחפיפה',0,100,'%'],
+  ['g','עט ולחץ'],
+  ['pSize','לחץ ← גודל',0,100,'%'],['pOpacity','לחץ ← שקיפות',0,100,'%'],['minSize','גודל מינימלי',0,100,'%'],['smoothing','החלקת קו',0,95,'%']
+];
+const ctls=$('ctls'),inputs={};
+SPEC.forEach(([k,label,a,b2,unit])=>{
+  if(k==='g'){const d=document.createElement('div');d.className='sec';d.textContent=label;ctls.appendChild(d);return;}
+  if(Array.isArray(a)){
+    const row=document.createElement('div');row.className='segrow';row.innerHTML='<span>'+label+'</span>';
+    const seg=document.createElement('div');seg.className='seg';
+    a.forEach(([v,t])=>{const btn=document.createElement('button');btn.textContent=t;btn.dataset.v=v;
+      btn.onclick=()=>{B[k]=v;changed();};seg.appendChild(btn);});
+    row.appendChild(seg);ctls.appendChild(row);inputs[k]={seg};return;
+  }
+  const row=document.createElement('label');row.className='ctl';
+  row.innerHTML='<span>'+label+'</span><input type="range" id="b_'+k+'" min="'+a+'" max="'+b2+'"><output></output>';
+  const inp=row.querySelector('input'),out=row.querySelector('output');
+  inp.oninput=()=>{B[k]=+inp.value;out.textContent=inp.value+unit;changed(k);};
+  ctls.appendChild(row);inputs[k]={inp,out,unit};
+});
+function syncCtls(){
+  for(const k in inputs){const c=inputs[k];
+    if(c.seg)c.seg.querySelectorAll('button').forEach(b=>{b.classList.toggle('on',b.dataset.v===B[k]);
+      if(b.dataset.v==='custom')b.hidden=!B.tipId;});
+    else{c.inp.value=B[k];c.out.textContent=B[k]+c.unit;}}
+  $('size').value=B.size;
+  const src=allBrushes().find(x=>x.id===bid);
+  $('brushName2').innerHTML=(src?src.name:'מברשת')+(modified?' <em>· שונתה</em>':'');
+  $('brushName').textContent=src?src.name:'מברשת';
+  $('brReset').hidden=!modified;$('brUpdate').hidden=!(modified&&bid.startsWith('c'));
+  updDot();
+}
+let prevT;
+function changed(k){modified=true;syncCtls();clearTimeout(prevT);prevT=setTimeout(drawPreview,k==='size'?60:20);}
+function selectBrush(id){const src=allBrushes().find(x=>x.id===id);if(!src)return;
+  B={...DEF,...src};delete B.id;delete B.name;bid=id;modified=false;syncCtls();drawPreview();renderLib();}
+function demo(w,h,b,cap){
+  const sz=Math.min(b.size,cap),pad=sz/2+6,pts=[];
+  for(let t=0;t<=1.0001;t+=.01)pts.push({x:pad+t*(w-2*pad),y:h/2+Math.sin(t*Math.PI*2)*h*.2,p:.15+.85*Math.sin(t*Math.PI),az:.8});
+  return{b:{...b,size:sz},color:null,erase:false,seed:7,pts};
+}
+function paintDemo(cv,b,col,cap){
+  const r=cv.getBoundingClientRect();if(!r.width)return;const s=window.devicePixelRatio||1;
+  cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);
+  const buf=makeBuf(cv.width,cv.height);
+  const d=demo(r.width,r.height,b,cap);d.color=col;renderStroke(cv.getContext('2d'),d,s,buf);
+}
+const inkCol=()=>getComputedStyle(document.body).color;
+function drawTipView(col){ // one dab, large, so the feather is easy to judge
+  const cv=$('tipView'),r=cv.getBoundingClientRect();if(!r.width)return;const s=window.devicePixelRatio||1;
+  cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);const x=cv.getContext('2d');
+  const R=cv.width*.42,rd=B.roundness/100,ang=B.angle*Math.PI/180,c=Math.cos(ang),si=Math.sin(ang);
+  x.globalAlpha=B.opacity/100;x.setTransform(c,si,-si*rd,c*rd,cv.width/2,cv.height/2);
+  x.drawImage(tip(B,col),-R,-R,2*R,2*R);x.setTransform(1,0,0,1,0,0);
+}
+function drawPreview(){if($('brushes').hidden)return;const col=erasing?inkCol():color;paintDemo($('prev'),B,col,64);drawTipView(col);}
+function renderLib(){
+  const lib=$('lib');lib.innerHTML='';const ink=inkCol();
+  allBrushes().forEach(br=>{
+    const t=document.createElement('div');t.className='bt'+(br.id===bid?' sel':'');t.tabIndex=0;t.setAttribute('role','button');
+    t.innerHTML='<canvas></canvas><span></span>';t.querySelector('span').textContent=br.name;
+    t.onclick=()=>selectBrush(br.id);t.onkeydown=e=>{if(e.key==='Enter')selectBrush(br.id);};
+    if(br.id.startsWith('c')){
+      const x=document.createElement('button');x.className='x';x.textContent='✕';x.setAttribute('aria-label','מחק מברשת');
+      let armed=false;
+      x.onclick=e=>{e.stopPropagation();
+        if(!armed){armed=true;x.textContent='מחק?';x.classList.add('armed');setTimeout(()=>{armed=false;x.textContent='✕';x.classList.remove('armed');},2500);return;}
+        customs=customs.filter(c=>c.id!==br.id);persist();if(bid===br.id){bid='';modified=true;}renderLib();syncCtls();};
+      t.appendChild(x);
+    }
+    lib.appendChild(t);
+    requestAnimationFrame(()=>paintDemo(t.querySelector('canvas'),{...DEF,...br},ink,14));
+  });
+}
+$('brSave').onclick=()=>{
+  const name=$('brNewName').value.trim()||('המברשת שלי '+(customs.length+1));
+  const nb={...B,id:'c'+Date.now(),name};customs.push(nb);persist();$('brNewName').value='';
+  bid=nb.id;modified=false;renderLib();syncCtls();toast('המברשת "'+name+'" נשמרה');
+};
+$('brNewName').onkeydown=e=>{if(e.key==='Enter')$('brSave').click();};
+$('brUpdate').onclick=()=>{const c=customs.find(x=>x.id===bid);if(!c)return;Object.assign(c,B);persist();modified=false;renderLib();syncCtls();toast('המברשת עודכנה');};
+$('brReset').onclick=()=>{if(bid)selectBrush(bid);};
+
+// =================== BRUSH-TIP EDITOR ===================
+const pad=$('tePad'),pctx=pad.getContext('2d');
+let teTool='pen',teSize=14,teInvert=false,padLast=null,padId=null,teT;
+function segPick(id,cb){$(id).querySelectorAll('button').forEach(b=>b.onclick=()=>{
+  $(id).querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));cb(b.dataset.v);});}
+segPick('teTool',v=>teTool=v);segPick('teSize',v=>teSize=+v);
+function padPt(e){const r=pad.getBoundingClientRect(),k=pad.width/r.width;
+  return{x:(e.clientX-r.left)*k,y:(e.clientY-r.top)*k,p:e.pointerType==='pen'?e.pressure:.6};}
+pad.addEventListener('pointerdown',e=>{if(padId!==null)return;if(e.pointerType==='touch'&&penSeen&&penOnly.checked)return;
+  e.preventDefault();padId=e.pointerId;pad.setPointerCapture(e.pointerId);padLast=padPt(e);padLine(padLast,padLast);});
+pad.addEventListener('pointermove',e=>{if(e.pointerId!==padId)return;e.preventDefault();
+  const evs=e.getCoalescedEvents?e.getCoalescedEvents():[];
+  for(const ev of(evs.length?evs:[e])){const q=padPt(ev);padLine(padLast,q);padLast=q;}});
+const padEnd=e=>{if(e.pointerId===padId){padId=null;teChanged();}};
+pad.addEventListener('pointerup',padEnd);pad.addEventListener('pointercancel',padEnd);
+['touchstart','touchmove'].forEach(t=>pad.addEventListener(t,e=>e.preventDefault(),{passive:false}));
+function padLine(a,q){
+  pctx.globalCompositeOperation=teTool==='erase'?'destination-out':'source-over';
+  pctx.strokeStyle=pctx.fillStyle='#000';pctx.lineCap=pctx.lineJoin='round';
+  pctx.lineWidth=teSize*(teTool==='erase'?2:1)*(.3+q.p*1.4);
+  pctx.beginPath();pctx.moveTo(a.x,a.y);pctx.lineTo(q.x+.01,q.y);pctx.stroke();
+  pctx.globalCompositeOperation='source-over';$('teHint').hidden=true;
+}
+function fitIntoPad(src,sx,sy,sw,sh){
+  pctx.clearRect(0,0,pad.width,pad.height);
+  const s=(pad.width-48)/Math.max(sw,sh);
+  pctx.drawImage(src,sx,sy,sw,sh,pad.width/2-sw*s/2,pad.height/2-sh*s/2,sw*s,sh*s);
+  $('teHint').hidden=true;teChanged();
+}
+// pad -> 128px centered mask. Transparent pictures use their alpha; opaque photos use darkness (dark = paint).
+function padToMask(){
+  const N=256,t=document.createElement('canvas');t.width=t.height=N;const tc=t.getContext('2d');tc.drawImage(pad,0,0,N,N);
+  const img=tc.getImageData(0,0,N,N),d=img.data;let clear=0;
+  for(let i=3;i<d.length;i+=4)if(d[i]<250)clear++;
+  const useAlpha=clear>N*N*.05;let max=0,x0=N,y0=N,x1=-1,y1=-1;const A=new Float32Array(N*N);
+  for(let i=0,j=0;i<d.length;i+=4,j++){
+    const lum=(d[i]*.299+d[i+1]*.587+d[i+2]*.114);
+    let a=useAlpha?d[i+3]:(255-lum)*d[i+3]/255;if(teInvert)a=255-a;A[j]=a;if(a>max)max=a;
+  }
+  if(max<10)return null;
+  const k=255/max;
+  for(let j=0;j<A.length;j++){const a=A[j]*k;const p=j*4;d[p]=d[p+1]=d[p+2]=255;d[p+3]=a;
+    if(a>12){const x=j%N,y=j/N|0;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}}
+  if(x1<0)return null;
+  tc.putImageData(img,0,0);
+  const m=document.createElement('canvas');m.width=m.height=128;const bw=x1-x0+1,bh=y1-y0+1,s=120/Math.max(bw,bh);
+  m.getContext('2d').drawImage(t,x0,y0,bw,bh,64-bw*s/2,64-bh*s/2,bw*s,bh*s);
+  return m;
+}
+function teBrush(){return{...B,shape:'custom',tipId:'__preview',spacing:Math.max(B.spacing,20)};}
+function teChanged(){clearTimeout(teT);teT=setTimeout(()=>{
+  const m=padToMask(),mc=$('teMask'),s=window.devicePixelRatio||1,r=mc.getBoundingClientRect();
+  mc.width=r.width*s;mc.height=r.height*s;const x=mc.getContext('2d');x.clearRect(0,0,mc.width,mc.height);
+  const pv=$('tePrev');
+  if(!m){pv.getContext('2d').clearRect(0,0,pv.width,pv.height);return;}
+  tipMasks.set('__preview',m);tipCache.clear();grayCache.clear();
+  x.drawImage(tip({shape:'custom',tipId:'__preview'},inkCol()),8,8,mc.width-16,mc.height-16);
+  paintDemo(pv,teBrush(),erasing?inkCol():color,40);
+},60);}
+function openEditor(){
+  $('tipEditor').hidden=false;$('teName').value='';
+  if(!pctx.getImageData(0,0,pad.width,pad.height).data.some((v,i)=>i%4===3&&v>0))$('teHint').hidden=false;
+  teChanged();
+}
+$('teOpen').onclick=openEditor;
+$('teCancel').onclick=()=>$('tipEditor').hidden=true;
+$('teClear').onclick=()=>{pctx.clearRect(0,0,pad.width,pad.height);$('teHint').hidden=false;teChanged();};
+$('teInvert').onclick=()=>{teInvert=!teInvert;$('teInvert').classList.toggle('on',teInvert);teChanged();};
+$('teLayer').onclick=()=>{
+  const c=active.canvas,w=c.width,h=c.height,d=active.ctx.getImageData(0,0,w,h).data;
+  let x0=w,y0=h,x1=-1,y1=-1;
+  for(let y=0;y<h;y+=2)for(let x=0;x<w;x+=2)if(d[(y*w+x)*4+3]>8){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+  if(x1<0){toast('השכבה הנוכחית ריקה');return;}
+  x0=Math.max(0,x0-2);y0=Math.max(0,y0-2);x1=Math.min(w-1,x1+2);y1=Math.min(h-1,y1+2);
+  fitIntoPad(c,x0,y0,x1-x0+1,y1-y0+1);
+};
+$('teFileBtn').onclick=()=>$('teFile').click();
+$('teFile').onchange=e=>{const f=e.target.files[0];if(!f)return;const url=URL.createObjectURL(f),im=new Image();
+  im.onload=()=>{fitIntoPad(im,0,0,im.naturalWidth,im.naturalHeight);URL.revokeObjectURL(url);};
+  im.onerror=()=>toast('לא הצלחתי לפתוח את התמונה');im.src=url;e.target.value='';};
+$('teCreate').onclick=()=>{
+  const m=padToMask();if(!m){toast('צייר משהו קודם');return;}
+  const id='t'+Date.now(),data=m.toDataURL('image/png');tipMasks.set(id,m);
+  const name=$('teName').value.trim()||('ראש מברשת '+(customs.filter(c=>c.tipId).length+1));
+  B={...B,shape:'custom',tipId:id,tipData:data,spacing:Math.max(B.spacing,20)};
+  const nb={...B,id:'c'+Date.now(),name};customs.push(nb);persist();
+  bid=nb.id;modified=false;$('tipEditor').hidden=true;
+  if($('brushes').hidden)setPanel($('brushes'),$('brushBtn'),true);
+  setErase(false);renderLib();syncCtls();drawPreview();toast('המברשת "'+name+'" נוצרה');
+};
+
+// panels toggling
+function setPanel(p,btn,open){p.hidden=!open;btn.classList.toggle('on',open);btn.setAttribute('aria-expanded',String(open));}
+function togglePanel(p,btn,other,otherBtn){
+  const open=p.hidden;setPanel(p,btn,open);
+  if(open&&window.innerWidth<820)setPanel(other,otherBtn,false);
+  if(open&&p===$('brushes')){drawPreview();renderLib();}
+}
+$('lyToggle').onclick=()=>togglePanel($('layers'),$('lyToggle'),$('brushes'),$('brushBtn'));
+$('brushBtn').onclick=()=>{if(erasing){setErase(false);if(!$('brushes').hidden)return;}togglePanel($('brushes'),$('brushBtn'),$('layers'),$('lyToggle'));};
+$('brClose').onclick=()=>setPanel($('brushes'),$('brushBtn'),false);
+
+let tt;function toast(m){const t=$('toast');t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,2200);}
+
+// =================== DOCK ===================
+function setErase(on){erasing=on;$('tEraser').classList.toggle('on',on);updDot();drawPreview();}
+$('tEraser').onclick=()=>setErase(!erasing);
+const swBox=$('swatches');
+function selColor(c,btn){color=c;swBox.querySelectorAll('.sw').forEach(s=>s.classList.toggle('on',s===btn));setErase(false);updDot();drawPreview();}
+COLORS.forEach((c,i)=>{const b=document.createElement('button');b.className='sw'+(i?'':' on');b.style.background=c;
+  b.setAttribute('aria-label','צבע '+c);b.onclick=()=>selColor(c,b);swBox.appendChild(b);});
+$('custom').oninput=e=>selColor(e.target.value,null);
+const dot=$('dot');
+function updDot(){const d=Math.max(3,Math.min(28,B.size*.6+2));dot.style.width=dot.style.height=d+'px';
+  dot.style.background=erasing?'var(--muted)':color;dot.style.borderRadius=B.shape==='square'?'3px':'50%';}
+$('size').oninput=e=>{B.size=+e.target.value;changed('size');};
+$('clear').onclick=()=>{
+  if(!active.strokes.length)return;
+  const a={type:'clear',layer:active,strokes:active.strokes.slice()};apply(a,1);push(a);toast('השכבה נוקתה – אפשר לבטל');
+};
+$('save').onclick=()=>{
+  const f=layers[0].canvas,out=document.createElement('canvas');out.width=f.width;out.height=f.height;
+  const o=out.getContext('2d');o.fillStyle=getComputedStyle(document.body).backgroundColor;o.fillRect(0,0,out.width,out.height);
+  layers.forEach(L=>{if(L.visible){o.globalAlpha=L.opacity;o.drawImage(L.canvas,0,0);}});
+  $('saveImg').src=out.toDataURL('image/png');$('saveBox').hidden=false;
+};
+$('closeSave').onclick=()=>$('saveBox').hidden=true;
+
+// =================== MOVABLE PANELS ===================
+// Drag a panel by its header (the toolbar by its grip). Drop it near a screen edge and it sticks to that edge.
+const wrapEl=$('wrap'),EDGE=12,TOP=54,SNAP=56;
+let placements={};try{placements=JSON.parse(localStorage.getItem('pencil-panels')||'{}');}catch(e){placements={};}
+function savePlacements(){try{localStorage.setItem('pencil-panels',JSON.stringify(placements));}catch(e){}}
+function placeEl(el,pl){
+  const W=wrapEl.clientWidth,H=wrapEl.clientHeight,w=el.offsetWidth,h=el.offsetHeight,st=el.style;
+  st.transform='none';st.left=st.right=st.top=st.bottom='auto';
+  if(pl.x==='left')st.left=EDGE+'px';else if(pl.x==='right')st.right=EDGE+'px';
+  else st.left=Math.min(Math.max(EDGE,pl.x),Math.max(EDGE,W-w-EDGE))+'px';
+  let top;
+  if(pl.y==='top')top=TOP;else if(pl.y==='bottom')top=null;else top=Math.min(Math.max(EDGE,pl.y),Math.max(EDGE,H-h-EDGE));
+  if(top==null){st.bottom='calc('+EDGE+'px + env(safe-area-inset-bottom,0px))';if(el.classList.contains('panel'))st.maxHeight=(H-TOP-EDGE)+'px';}
+  else{st.top=top+'px';if(el.classList.contains('panel'))st.maxHeight=(H-top-EDGE)+'px';}
+}
+function makeMovable(el,handle){
+  let start=null,moved=false;
+  handle.addEventListener('pointerdown',e=>{
+    if(e.target!==handle&&e.target.closest('button,input,label')&&e.target.closest('button,input,label')!==handle)return;
+    const r=el.getBoundingClientRect(),wr=wrapEl.getBoundingClientRect();
+    start={px:e.clientX,py:e.clientY,x:r.left-wr.left,y:r.top-wr.top,id:e.pointerId};moved=false;
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener('pointermove',e=>{
+    if(!start||e.pointerId!==start.id)return;
+    const dx=e.clientX-start.px,dy=e.clientY-start.py;
+    if(!moved){if(Math.hypot(dx,dy)<5)return;moved=true;el.classList.remove('placed');el.classList.add('dragging');}
+    e.preventDefault();
+    const W=wrapEl.clientWidth,H=wrapEl.clientHeight,w=el.offsetWidth,h=el.offsetHeight;
+    const x=Math.min(Math.max(0,start.x+dx),W-w),y=Math.min(Math.max(0,start.y+dy),H-h);
+    const st=el.style;st.transform='none';st.right=st.bottom='auto';st.left=x+'px';st.top=y+'px';
+    el.classList.toggle('snapping',x<SNAP||x>W-w-SNAP||y<SNAP+TOP-EDGE||y>H-h-SNAP);
+  });
+  const drop=e=>{
+    if(!start||e.pointerId!==start.id)return;start=null;
+    if(!moved)return;
+    el.classList.remove('dragging','snapping');
+    const W=wrapEl.clientWidth,H=wrapEl.clientHeight,w=el.offsetWidth,h=el.offsetHeight,x=el.offsetLeft,y=el.offsetTop;
+    const pl={x:x<SNAP?'left':x>W-w-SNAP?'right':Math.round(x),y:y<SNAP+TOP-EDGE?'top':y>H-h-SNAP?'bottom':Math.round(y)};
+    placements[el.id]=pl;savePlacements();el.classList.add('placed');placeEl(el,pl);
+    requestAnimationFrame(()=>setTimeout(()=>el.classList.remove('placed'),200));
+  };
+  handle.addEventListener('pointerup',drop);handle.addEventListener('pointercancel',drop);
+  // a drag must not also count as a click on the grip
+  handle.addEventListener('click',e=>{if(moved){e.stopPropagation();e.preventDefault();moved=false;}},true);
+}
+const dockEl=document.querySelector('.dock');dockEl.id='dock';
+makeMovable($('layers'),$('layers').querySelector('header'));
+makeMovable($('brushes'),$('brushes').querySelector('header'));
+makeMovable(dockEl,$('dockGrip'));
+function placeAll(){for(const id in placements){const el=$(id);if(el&&!el.hidden)placeEl(el,placements[id]);}}
+window.addEventListener('resize',placeAll);
+// panels that were hidden get placed when they open
+new MutationObserver(ms=>ms.forEach(m=>{const el=m.target;if(!el.hidden&&placements[el.id])placeEl(el,placements[el.id]);}))
+  .observe(wrapEl,{subtree:true,attributes:true,attributeFilter:['hidden']});
+
+// =================== START ===================
+dpr=window.devicePixelRatio||1;fitBufs();
+const r=stack.getBoundingClientRect();
+const first=makeLayer();insertLayer(first,0);active=first;
+if(r.width<800){setPanel($('layers'),$('lyToggle'),false);setPanel($('brushes'),$('brushBtn'),false);}
+customs.forEach(c=>{if(c.tipId&&c.tipData)loadTip(c.tipId,c.tipData,()=>{tipCache.clear();grayCache.clear();renderLib();drawPreview();});});
+updUndo();renderLayers();syncCtls();renderLib();drawPreview();placeAll();
+})();
+</script>
+
+</body>
+</html>
