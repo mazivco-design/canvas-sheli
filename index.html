@@ -17,18 +17,18 @@
 <style>
 /* Layout: full-screen paper with stacked layer canvases; brush panel on the left, layers panel on the right, tool dock at bottom */
 :root{
-  --paper:#fbfaf6; --ink:#1f2328; --dock:#ffffff; --line:#e3e1d9; --accent:#2f6fde; --muted:#6b6f76; --check:#efede6;
+  --desk:#e4e2db; --paper:#fbfaf6; --ink:#1f2328; --dock:#ffffff; --line:#e3e1d9; --accent:#2f6fde; --muted:#6b6f76; --check:#efede6;
   --pad1:#ffffff; --pad2:#ecebe6; /* the tip pad is always light paper, in both themes */
   --font:"Rubik",system-ui,-apple-system,"Segoe UI",sans-serif;
 }
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--paper:#1c1d20;--ink:#e9e7e1;--dock:#2a2b2f;--line:#3a3b40;--accent:#6d9cf0;--muted:#9a9ca3;--check:#33343a;color-scheme:dark}}
-:root[data-theme="dark"]{--paper:#1c1d20;--ink:#e9e7e1;--dock:#2a2b2f;--line:#3a3b40;--accent:#6d9cf0;--muted:#9a9ca3;--check:#33343a;color-scheme:dark}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--desk:#121315;--paper:#1c1d20;--ink:#e9e7e1;--dock:#2a2b2f;--line:#3a3b40;--accent:#6d9cf0;--muted:#9a9ca3;--check:#33343a;color-scheme:dark}}
+:root[data-theme="dark"]{--desk:#121315;--paper:#1c1d20;--ink:#e9e7e1;--dock:#2a2b2f;--line:#3a3b40;--accent:#6d9cf0;--muted:#9a9ca3;--check:#33343a;color-scheme:dark}
 [hidden]{display:none!important}
 html,body{height:100%;overflow:hidden}
 body{background:var(--paper);color:var(--ink);font-family:var(--font);
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
-#wrap{position:relative;height:100%}
-#stack{position:absolute;inset:0;touch-action:none;cursor:crosshair}
+#wrap{position:relative;height:100%;overflow:hidden;background:var(--desk)}
+#stack{position:absolute;inset:0;touch-action:none;cursor:crosshair;transform-origin:0 0;background:var(--paper);box-shadow:0 0 0 1px rgb(0 0 0 / .06),0 6px 30px rgb(0 0 0 / .10)}
 #stack canvas{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
 .top{position:absolute;top:10px;left:max(16px,env(safe-area-inset-left,0px));right:max(16px,env(safe-area-inset-right,0px));
   display:flex;justify-content:space-between;align-items:flex-start;gap:8px;pointer-events:none}
@@ -158,6 +158,23 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 .placed{transition:left .18s ease,top .18s ease,right .18s ease,bottom .18s ease}
 @media (prefers-reduced-motion:reduce){.placed{transition:none}}
 
+/* colour panel */
+#colors{left:calc(50% - 135px);width:270px}
+.co{padding:0 12px 12px;display:grid;grid-template-columns:minmax(0,1fr);gap:10px;overflow-y:auto;min-width:0}
+.co .seg button{height:32px;flex:1}
+#svPad{width:100%;max-width:100%;min-width:0;aspect-ratio:1.35;border-radius:10px;touch-action:none;cursor:crosshair;display:block}
+#huePad{width:100%;max-width:100%;min-width:0;height:22px;border-radius:11px;touch-action:none;cursor:pointer;display:block}
+.co-row{display:flex;align-items:center;gap:8px}
+.co-cur{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);flex:none}
+#coHex{flex:1;min-width:0;font:inherit;font-size:14px;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:10px;height:36px;padding:0 10px;font-variant-numeric:tabular-nums;-webkit-user-select:text;user-select:text}
+#coBgReset{height:36px;border:1px solid var(--line);font-size:13px}
+.co-sw{display:flex;flex-wrap:wrap;gap:6px}
+.co-sw:empty::before{content:"צבעים שתבחר יופיעו כאן";font-size:12px;color:var(--muted)}
+.cbtn{width:36px;min-width:36px;height:36px;padding:3px;border-radius:50%;background:conic-gradient(#e5484d,#f5a524,#30a46c,#2f6fde,#8a3ffc,#e5484d)}
+.cbtn i{display:block;width:100%;height:100%;border-radius:50%;border:2px solid var(--dock)}
+.cbtn.on{box-shadow:0 0 0 2px var(--dock),0 0 0 4px var(--accent)}
+#zoomPill{font-variant-numeric:tabular-nums}
+
 #toast{position:absolute;top:60px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);
   padding:8px 14px;border-radius:999px;font-size:14px;pointer-events:none;z-index:9}
 #saveBox{position:absolute;inset:0;background:rgb(0 0 0 / .55);display:grid;place-items:center;z-index:10;
@@ -177,6 +194,7 @@ input[type=range]{width:110px;accent-color:var(--accent)}
   <div class="top">
     <div class="side">
       <button class="pill on" id="lyToggle" aria-expanded="true">שכבות · <b id="lyName">שכבה 2</b></button>
+      <button class="pill" id="zoomPill" hidden title="חזרה לגודל רגיל">100%</button>
       <div class="pill" id="status">עט: <b id="penState">לא זוהה עדיין</b> · לחץ <b id="pr">–</b></div>
     </div>
     <div class="pill"><label><input type="checkbox" id="penOnly" checked> רק עט</label></div>
@@ -200,6 +218,21 @@ input[type=range]{width:110px;accent-color:var(--accent)}
         <button id="lyMerge">מזג למטה</button>
       </div>
     </footer>
+  </aside>
+
+  <aside id="colors" class="panel" aria-label="צבעים" hidden>
+    <header>
+      <span>צבע</span>
+      <div class="grp"><button id="coClose" aria-label="סגור"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    </header>
+    <div class="co">
+      <div class="seg" id="coTarget"><button data-t="brush" class="on">מברשת</button><button data-t="bg">רקע</button></div>
+      <canvas id="svPad" aria-label="רוויה ובהירות"></canvas>
+      <canvas id="huePad" aria-label="גוון"></canvas>
+      <div class="co-row"><span class="co-cur" id="coCur"></span><input id="coHex" maxlength="7" aria-label="קוד צבע" dir="ltr"><button id="coBgReset" hidden>רקע רגיל</button></div>
+      <span class="sec">אחרונים</span>
+      <div class="co-sw" id="coRecent"></div>
+    </div>
   </aside>
 
   <aside id="brushes" class="panel" aria-label="מברשות">
@@ -236,7 +269,7 @@ input[type=range]{width:110px;accent-color:var(--accent)}
     </div>
     <div class="sep"></div>
     <div class="grp" id="swatches"></div>
-    <input type="color" id="custom" value="#8a3ffc" aria-label="צבע מותאם">
+    <button id="colorBtn" class="cbtn" aria-label="בחירת צבע" aria-expanded="false" title="צבעים"><i></i></button>
     <div class="sep"></div>
     <div class="grp">
       <div class="size-dot"><i id="dot"></i></div>
@@ -521,7 +554,7 @@ function renderStroke(target,s,scale,bufs){
   const n=s.b.heads.length;bufs=bufs||bufsFor(n);let rect=null;
   for(let i=0;i<n;i++){
     resetBuf(bufs[i]);const st=stamper(bufs[i],headBrush(s.b,i),s.seed+i*7919,scale);
-    st.first(s.pts[0]);for(let j=1;j<s.pts.length;j++)st.seg(s.pts[j-1],s.pts[j]);st.finish();rect=uni(rect,st.take());
+    st.first(s.pts[0]);let prev=s.pts[0];const f=feeder(pt=>{st.seg(prev,pt);prev=pt;});s.pts.forEach(q=>f.push(q));f.end();st.finish();rect=uni(rect,st.take());
   }
   composite(bufs.slice(0,n),rect,s,target,target);
 }
@@ -531,7 +564,7 @@ let layers=[],active=null,nextNum=1,history=[],future=[],cur=null,activeId=null,
 const snap=document.createElement('canvas');let snapX=snap.getContext('2d',{willReadFrequently:true});
 function makeLayer(name,strokes=[]){const c=document.createElement('canvas');
   return{name:name||('שכבה '+nextNum++),canvas:c,ctx:c.getContext('2d',{willReadFrequently:true}),strokes,visible:true,opacity:1,thumb:null};}
-function fit(c){const r=stack.getBoundingClientRect();c.width=Math.round(r.width*dpr);c.height=Math.round(r.height*dpr);}
+function fit(c){c.width=Math.round(stack.clientWidth*dpr);c.height=Math.round(stack.clientHeight*dpr);} // layout size, not the zoomed size
 function mount(){
   layers.forEach((L,i)=>{L.canvas.style.zIndex=i*2;L.canvas.style.opacity=L.opacity;L.canvas.hidden=!L.visible;
     if(L.canvas.parentNode!==stack)stack.appendChild(L.canvas);});
@@ -545,7 +578,7 @@ function redrawLayer(L){
   c.clearRect(0,0,L.canvas.width,L.canvas.height);
   L.strokes.forEach(s=>renderStroke(c,s,dpr));updThumb(L);
 }
-function fitBufs(){const r=stack.getBoundingClientRect(),w=Math.round(r.width*dpr),h=Math.round(r.height*dpr);bufW=w;bufH=h;pool.forEach(b=>sizeBuf(b,w,h));fit(snap);snapX=snap.getContext('2d',{willReadFrequently:true});}
+function fitBufs(){const w=Math.round(stack.clientWidth*dpr),h=Math.round(stack.clientHeight*dpr);bufW=w;bufH=h;pool.forEach(b=>sizeBuf(b,w,h));fit(snap);snapX=snap.getContext('2d',{willReadFrequently:true});}
 function resize(){dpr=window.devicePixelRatio||1;fitBufs();layers.forEach(L=>{fit(L.canvas);redrawLayer(L);});}
 window.addEventListener('resize',resize);
 
@@ -570,34 +603,47 @@ $('redo').onclick=()=>{const a=future.pop();if(a){apply(a,1);history.push(a);upd
 function updUndo(){$('undo').disabled=!history.length;$('redo').disabled=!future.length;}
 
 // =================== INPUT ===================
-const penOnly=$('penOnly');let penSeen=false;
+const penOnly=$('penOnly');let penSeen=false,fd=null,prevEmit=null;
 function allowed(e){
   if(e.pointerType==='pen'){if(!penSeen){penSeen=true;$('penState').textContent='מחובר ✓';}return true;}
   if(e.pointerType==='touch')return!(penOnly.checked&&penSeen);
   return true;
 }
-function raw(e){
+function raw(e){ // pen position in canvas pixels (undoing zoom and pan)
   const r=stack.getBoundingClientRect();
   let p=e.pointerType==='pen'?e.pressure:0.6, az=null;
   if(typeof e.azimuthAngle==='number'&&e.pointerType==='pen')az=e.azimuthAngle;
   else if(e.tiltX||e.tiltY)az=Math.atan2(e.tiltY,e.tiltX);
-  return{x:e.clientX-r.left,y:e.clientY-r.top,p,az};
+  return{x:(e.clientX-r.left)/view.z,y:(e.clientY-r.top)/view.z,p,az};
 }
-function smooth(q){ // streamline: lag the point toward the pen
+function smooth(q){ // streamline: lag the point toward the pen. Pressure is also eased over a short distance,
+  // because the pen's raw pressure flickers from reading to reading and makes the line swell like beads.
   const pts=cur.pts,last=pts[pts.length-1],k=cur.b.smoothing/100*.9;
-  return{x:last.x+(q.x-last.x)*(1-k),y:last.y+(q.y-last.y)*(1-k),p:last.p+(q.p-last.p)*(1-k*.5),az:q.az};
+  const kp=Math.min(1-k*.5,.25+Math.hypot(q.x-last.x,q.y-last.y)/Math.max(4,cur.b.size*.5));
+  return{x:last.x+(q.x-last.x)*(1-k),y:last.y+(q.y-last.y)*(1-k),p:last.p+(q.p-last.p)*kp,az:q.az};
+}
+// Turns the pen's points into a smooth curve (Catmull-Rom), one point behind the pen, so a stroke has no corners.
+// Live drawing and redraw (undo) use the same feeder, so the result is identical.
+function feeder(emit){const P=[];
+  function segment(p0,p1,p2,p3){const d=Math.hypot(p2.x-p1.x,p2.y-p1.y),n=Math.max(1,Math.min(48,Math.ceil(d/1.5)));
+    const f=(a,b,c,dd,t)=>.5*(2*b+(-a+c)*t+(2*a-5*b+4*c-dd)*t*t+(-a+3*b-3*c+dd)*t*t*t);
+    for(let i=1;i<=n;i++){const t=i/n;emit({x:f(p0.x,p1.x,p2.x,p3.x,t),y:f(p0.y,p1.y,p2.y,p3.y,t),p:p1.p+(p2.p-p1.p)*t,az:p2.az});}}
+  return{push(q){P.push(q);const n=P.length;if(n>=3)segment(P[n-4]||P[n-3],P[n-3],P[n-2],q);},
+    end(){const n=P.length;if(n>=2)segment(P[n-3]||P[n-2],P[n-2],P[n-1],P[n-1]);}};
 }
 function liveUpdate(){let r=null;st.forEach(t=>r=uni(r,t.take()));composite(cur.bufs,r,cur,active.ctx,snapX);}
 stack.addEventListener('pointerdown',e=>{
-  if(!allowed(e)||activeId!==null)return;
+  if(!allowed(e)||activeId!==null||gest)return;
   e.preventDefault();
   if(!active.visible){toast('השכבה מוסתרת – הפעל את העין כדי לצייר');return;}
-  activeId=e.pointerId;stack.setPointerCapture(e.pointerId);
+  activeId=e.pointerId;try{stack.setPointerCapture(e.pointerId);}catch(_){}
   const p=raw(e);lastRaw=p;
   cur={b:cloneB(B),color,erase:erasing,seed:(Math.random()*2**31)|0,pts:[p]};
+  Object.defineProperty(cur,'ptype',{value:e.pointerType,enumerable:false});
   const bufs=bufsFor(cur.b.heads.length);bufs.forEach(resetBuf);
   snapX.setTransform(1,0,0,1,0,0);snapX.globalAlpha=1;snapX.globalCompositeOperation='copy';snapX.drawImage(active.canvas,0,0);snapX.globalCompositeOperation='source-over';
   st=cur.b.heads.map((h,i)=>stamper(bufs[i],headBrush(cur.b,i),cur.seed+i*7919,dpr));st.forEach(t=>t.first(p));
+  prevEmit=p;fd=feeder(pt=>{st.forEach(t=>t.seg(prevEmit,pt));prevEmit=pt;});fd.push(p);
   Object.defineProperty(cur,'bufs',{value:bufs,enumerable:false,writable:true});liveUpdate();
 });
 stack.addEventListener('pointermove',e=>{
@@ -606,8 +652,7 @@ stack.addEventListener('pointermove',e=>{
   e.preventDefault();
   const evs=e.getCoalescedEvents?e.getCoalescedEvents():[];
   for(const ev of(evs.length?evs:[e])){
-    const r=raw(ev);lastRaw=r;const q=smooth(r);
-    st.forEach(t=>t.seg(cur.pts[cur.pts.length-1],q));cur.pts.push(q);
+    const r=raw(ev);lastRaw=r;const q=smooth(r);cur.pts.push(q);fd.push(q);
   }
   liveUpdate();
 });
@@ -615,12 +660,69 @@ function end(e){
   if(e.pointerId!==activeId)return;activeId=null;
   if(!cur)return;
   // let the smoothed line catch up to where the pen lifted
-  if(cur.b.smoothing>0&&lastRaw&&cur.pts.length>1){const q={...lastRaw,p:cur.pts[cur.pts.length-1].p};st.forEach(t=>t.seg(cur.pts[cur.pts.length-1],q));cur.pts.push(q);}
-  st.forEach(t=>t.finish());liveUpdate();
-  active.strokes.push(cur);push({type:'stroke',layer:active,stroke:cur});updThumb(active);cur=null;st=null;
+  if(cur.b.smoothing>0&&lastRaw&&cur.pts.length>1){const q={...lastRaw,p:cur.pts[cur.pts.length-1].p};cur.pts.push(q);fd.push(q);}
+  fd.end();st.forEach(t=>t.finish());liveUpdate();
+  active.strokes.push(cur);push({type:'stroke',layer:active,stroke:cur});updThumb(active);cur=null;st=null;fd=null;
 }
 stack.addEventListener('pointerup',end);stack.addEventListener('pointercancel',end);
 ['touchstart','touchmove','gesturestart'].forEach(t=>stack.addEventListener(t,e=>e.preventDefault(),{passive:false}));
+
+// =================== ZOOM & PAN ===================
+// Two fingers: pinch to zoom, drag to move. A quick two-finger tap undoes.
+// With "pen only" on (after the pen was seen), one finger also moves the canvas.
+const view={z:1,x:0,y:0},wrapG=$('wrap'),tp=new Map();let gest=null;
+function applyView(){stack.style.transform='translate('+view.x+'px,'+view.y+'px) scale('+view.z+')';
+  const zp=$('zoomPill');zp.textContent=Math.round(view.z*100)+'%';zp.hidden=Math.abs(view.z-1)<.01&&Math.abs(view.x)<1&&Math.abs(view.y)<1;}
+const onCanvas=t=>t===wrapG||stack.contains(t);
+function cancelTouchStroke(){
+  if(!cur||cur.ptype!=='touch')return;
+  const c=active.ctx;c.setTransform(1,0,0,1,0,0);c.globalAlpha=1;c.globalCompositeOperation='copy';c.drawImage(snap,0,0);c.globalCompositeOperation='source-over';
+  cur=null;st=null;fd=null;activeId=null;
+}
+function gPts(){return[...tp.values()];}
+function gStart(keep){const ps=gPts(),two=ps.length>1;
+  const c=two?{x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2}:ps[0];
+  gest={c,d:two?Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y):0,z:view.z,x:view.x,y:view.y,n:ps.length,
+    t0:keep?keep.t0:Date.now(),moved:keep?keep.moved:false,max:Math.max(ps.length,keep?keep.max:0)};}
+function gMove(){const ps=gPts();if(ps.length!==gest.n){gStart(gest);return;}
+  const two=ps.length>1,c=two?{x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2}:ps[0];
+  let z=gest.z;if(two&&gest.d>10)z=Math.min(8,Math.max(.2,gest.z*Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y)/gest.d));
+  const cx=(gest.c.x-gest.x)/gest.z,cy=(gest.c.y-gest.y)/gest.z;
+  view.z=z;view.x=c.x-cx*z;view.y=c.y-cy*z;
+  if(Math.hypot(c.x-gest.c.x,c.y-gest.c.y)>8||Math.abs(z/gest.z-1)>.05)gest.moved=true;
+  applyView();
+}
+function wPos(e){const r=wrapG.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};}
+wrapG.addEventListener('pointerdown',e=>{
+  if(e.pointerType!=='touch'||!onCanvas(e.target))return;
+  tp.set(e.pointerId,wPos(e));
+  if(tp.size>=2||(penOnly.checked&&penSeen)||gest){
+    cancelTouchStroke();gStart(gest);e.stopPropagation();e.preventDefault();
+    try{wrapG.setPointerCapture(e.pointerId);}catch(_){}
+  }
+},true);
+wrapG.addEventListener('pointermove',e=>{
+  if(!tp.has(e.pointerId))return;tp.set(e.pointerId,wPos(e));
+  if(gest){gMove();e.stopPropagation();e.preventDefault();}
+},true);
+const gEnd=e=>{
+  if(!tp.has(e.pointerId))return;tp.delete(e.pointerId);
+  if(!gest)return;e.stopPropagation();
+  if(tp.size===0){const g=gest;gest=null;
+    if(g.max===2&&!g.moved&&Date.now()-g.t0<300)$('undo').click();}
+  else gStart(gest);
+};
+wrapG.addEventListener('pointerup',gEnd,true);wrapG.addEventListener('pointercancel',gEnd,true);
+['touchstart','touchmove','gesturestart'].forEach(t=>wrapG.addEventListener(t,e=>{if(onCanvas(e.target))e.preventDefault();},{passive:false}));
+// trackpad / mouse wheel: pinch (ctrl+wheel) zooms around the pointer, scrolling moves
+wrapG.addEventListener('wheel',e=>{
+  if(!onCanvas(e.target))return;e.preventDefault();const p=wPos(e);
+  if(e.ctrlKey){const z=Math.min(8,Math.max(.2,view.z*Math.exp(-e.deltaY*.01)));
+    view.x=p.x-(p.x-view.x)*z/view.z;view.y=p.y-(p.y-view.y)*z/view.z;view.z=z;}
+  else{view.x-=e.deltaX;view.y-=e.deltaY;}
+  applyView();
+},{passive:false});
+$('zoomPill').onclick=()=>{view.z=1;view.x=0;view.y=0;applyView();};
 
 // =================== LAYERS PANEL ===================
 const list=$('lyList');
@@ -908,13 +1010,13 @@ $('brClose').onclick=()=>setPanel($('brushes'),$('brushBtn'),false);
 let tt;function toast(m){const t=$('toast');t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,2200);}
 
 // =================== DOCK ===================
-function setErase(on){erasing=on;$('tEraser').classList.toggle('on',on);updDot();drawPreview();}
+function setErase(on){erasing=on;$('tEraser').classList.toggle('on',on);updDot();drawPreview();if($('colorBtn'))updColorBtn();}
 $('tEraser').onclick=()=>setErase(!erasing);
 const swBox=$('swatches');
-function selColor(c,btn){color=c;swBox.querySelectorAll('.sw').forEach(s=>s.classList.toggle('on',s===btn));setErase(false);updDot();drawPreview();}
+function selColor(c,btn){color=c;swBox.querySelectorAll('.sw').forEach(s=>s.classList.toggle('on',s===btn));setErase(false);updDot();drawPreview();updColorBtn();
+  if(!$('colors').hidden&&coTarget==='brush'){hsv=hex2hsv(c);drawPicker();}}
 COLORS.forEach((c,i)=>{const b=document.createElement('button');b.className='sw'+(i?'':' on');b.style.background=c;
   b.setAttribute('aria-label','צבע '+c);b.onclick=()=>selColor(c,b);swBox.appendChild(b);});
-$('custom').oninput=e=>selColor(e.target.value,null);
 const dot=$('dot');
 function updDot(){const d=Math.max(3,Math.min(28,B.size*.6+2));dot.style.width=dot.style.height=d+'px';
   dot.style.background=erasing?'var(--muted)':color;dot.style.borderRadius=B.heads[0].shape==='square'?'3px':'50%';}
@@ -925,11 +1027,71 @@ $('clear').onclick=()=>{
 };
 $('save').onclick=()=>{
   const f=layers[0].canvas,out=document.createElement('canvas');out.width=f.width;out.height=f.height;
-  const o=out.getContext('2d');o.fillStyle=getComputedStyle(document.body).backgroundColor;o.fillRect(0,0,out.width,out.height);
+  const o=out.getContext('2d');o.fillStyle=getComputedStyle(stack).backgroundColor;o.fillRect(0,0,out.width,out.height);
   layers.forEach(L=>{if(L.visible){o.globalAlpha=L.opacity;o.drawImage(L.canvas,0,0);}});
   $('saveImg').src=out.toDataURL('image/png');$('saveBox').hidden=false;
 };
 $('closeSave').onclick=()=>$('saveBox').hidden=true;
+
+// =================== COLOURS ===================
+// Floating colour panel: saturation/brightness square, hue strip, hex, recent colours.
+// It edits either the brush colour or the canvas background.
+let bgColor=null,coTarget='brush',hsv={h:0,s:0,v:0},recent=[];
+try{bgColor=localStorage.getItem('pencil-bg')||null;}catch(e){}
+try{recent=JSON.parse(localStorage.getItem('pencil-recent')||'[]');}catch(e){recent=[];}
+function applyBg(){stack.style.background=bgColor||'var(--paper)';try{bgColor?localStorage.setItem('pencil-bg',bgColor):localStorage.removeItem('pencil-bg');}catch(e){}}
+function hex2hsv(hx){const[r,g,b]=rgb(hx).map(v=>v/255),mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;
+  let h=0;if(d){h=mx===r?((g-b)/d)%6:mx===g?(b-r)/d+2:(r-g)/d+4;h*=60;if(h<0)h+=360;}
+  return{h,s:mx?d/mx:0,v:mx};}
+function hsv2hex({h,s,v}){const f=n=>{const k=(n+h/60)%6;return v-v*s*Math.max(0,Math.min(k,4-k,1));};
+  return'#'+[f(5),f(3),f(1)].map(x=>Math.round(x*255).toString(16).padStart(2,'0')).join('');}
+const curTargetColor=()=>coTarget==='bg'?(bgColor||getComputedStyle(document.documentElement).getPropertyValue('--paper').trim()||'#fbfaf6'):color;
+function fitCv(cv){const r=cv.getBoundingClientRect(),s=window.devicePixelRatio||1;cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);return s;}
+function drawPicker(){
+  if($('colors').hidden)return;
+  const sv=$('svPad'),hu=$('huePad');fitCv(sv);fitCv(hu);
+  const x=sv.getContext('2d'),W=sv.width,H=sv.height;
+  x.fillStyle=hsv2hex({h:hsv.h,s:1,v:1});x.fillRect(0,0,W,H);
+  let g=x.createLinearGradient(0,0,W,0);g.addColorStop(0,'#fff');g.addColorStop(1,'rgba(255,255,255,0)');x.fillStyle=g;x.fillRect(0,0,W,H);
+  g=x.createLinearGradient(0,0,0,H);g.addColorStop(0,'rgba(0,0,0,0)');g.addColorStop(1,'#000');x.fillStyle=g;x.fillRect(0,0,W,H);
+  const mx=hsv.s*W,my=(1-hsv.v)*H,R=7*(W/sv.clientWidth);
+  x.lineWidth=R*.35;x.strokeStyle='#fff';x.beginPath();x.arc(mx,my,R,0,7);x.stroke();x.strokeStyle='rgba(0,0,0,.5)';x.lineWidth=R*.15;x.beginPath();x.arc(mx,my,R+R*.25,0,7);x.stroke();
+  const y=hu.getContext('2d'),HW=hu.width,HH=hu.height;g=y.createLinearGradient(0,0,HW,0);
+  for(let i=0;i<=6;i++)g.addColorStop(i/6,hsv2hex({h:i*60%360,s:1,v:1}));y.fillStyle=g;y.fillRect(0,0,HW,HH);
+  const hx=hsv.h/360*HW;y.lineWidth=HH*.12;y.strokeStyle='#fff';y.strokeRect(hx-HH*.18,HH*.06,HH*.36,HH*.88);
+  const hex=hsv2hex(hsv);$('coHex').value=hex;$('coCur').style.background=hex;
+  $('coBgReset').hidden=coTarget!=='bg'||!bgColor;
+  const rc=$('coRecent');rc.innerHTML='';
+  recent.forEach(c=>{const b=document.createElement('button');b.className='sw';b.style.background=c;b.setAttribute('aria-label','צבע '+c);
+    b.onclick=()=>{hsv=hex2hsv(c);commit(true);};rc.appendChild(b);});
+}
+function commit(final){
+  const hex=hsv2hex(hsv);
+  if(coTarget==='bg'){bgColor=hex;applyBg();}
+  else{color=hex;swBox.querySelectorAll('.sw').forEach(s=>s.classList.toggle('on',s.style.background&&rgb(s.style.background).join()===rgb(hex).join()));
+    setErase(false);updDot();drawPreview();updColorBtn();
+    if(final){recent=[hex].concat(recent.filter(c=>c!==hex)).slice(0,12);try{localStorage.setItem('pencil-recent',JSON.stringify(recent));}catch(e){}}}
+  drawPicker();
+}
+function dragPad(cv,fn){
+  let id=null;
+  cv.addEventListener('pointerdown',e=>{id=e.pointerId;cv.setPointerCapture(id);fn(e);commit(false);});
+  cv.addEventListener('pointermove',e=>{if(e.pointerId===id){fn(e);commit(false);}});
+  const up=e=>{if(e.pointerId===id){id=null;commit(true);}};cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+}
+const clamp01=v=>Math.min(1,Math.max(0,v));
+dragPad($('svPad'),e=>{const r=$('svPad').getBoundingClientRect();hsv.s=clamp01((e.clientX-r.left)/r.width);hsv.v=1-clamp01((e.clientY-r.top)/r.height);});
+dragPad($('huePad'),e=>{const r=$('huePad').getBoundingClientRect();hsv.h=clamp01((e.clientX-r.left)/r.width)*359.9;});
+$('coHex').onchange=e=>{let v=e.target.value.trim();if(!v.startsWith('#'))v='#'+v;
+  if(/^#[0-9a-f]{6}$/i.test(v)){hsv=hex2hsv(v);commit(true);}else{toast('כתוב צבע בצורה ‎#RRGGBB');drawPicker();}};
+$('coTarget').querySelectorAll('button').forEach(b=>b.onclick=()=>{coTarget=b.dataset.t;
+  $('coTarget').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));hsv=hex2hsv(curTargetColor());drawPicker();});
+$('coBgReset').onclick=()=>{bgColor=null;applyBg();hsv=hex2hsv(curTargetColor());drawPicker();};
+function updColorBtn(){$('colorBtn').querySelector('i').style.background=erasing?'transparent':color;}
+$('colorBtn').onclick=()=>{const p=$('colors'),open=p.hidden;setPanel(p,$('colorBtn'),open);
+  if(open){hsv=hex2hsv(curTargetColor());requestAnimationFrame(drawPicker);}};
+$('coClose').onclick=()=>setPanel($('colors'),$('colorBtn'),false);
+applyBg();updColorBtn();
 
 // =================== MOVABLE PANELS ===================
 // Drag a panel by its header (the toolbar by its grip). Drop it near a screen edge and it sticks to that edge.
@@ -981,6 +1143,7 @@ const dockEl=document.querySelector('.dock');dockEl.id='dock';
 makeMovable($('layers'),$('layers').querySelector('header'));
 makeMovable($('brushes'),$('brushes').querySelector('header'));
 makeMovable(dockEl,$('dockGrip'));
+makeMovable($('colors'),$('colors').querySelector('header'));
 function placeAll(){for(const id in placements){const el=$(id);if(el&&!el.hidden)placeEl(el,placements[id]);}}
 window.addEventListener('resize',placeAll);
 // panels that were hidden get placed when they open
