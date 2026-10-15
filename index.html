@@ -113,7 +113,12 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 .heads{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .heads button{height:34px;min-width:0;padding:0 12px;border:1px solid var(--line);font-size:13px;border-radius:9px}
 .heads button.add{color:var(--accent);border-style:dashed}
-.heads button.del{color:var(--muted);margin-inline-start:auto}
+.heads .chip{display:flex;align-items:center;gap:6px;padding:0 8px;height:40px}
+.heads .chip canvas{width:28px;height:28px;border-radius:6px;background:repeating-conic-gradient(var(--check) 0 25%,var(--paper) 0 50%) 0 0/8px 8px}
+.heads .chip.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+.heads .hx{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;color:var(--muted);font-size:12px}
+.heads .hx:hover{background:var(--line)}
+#headColorRow input{width:44px;height:30px;border:1px solid var(--line);border-radius:8px;background:none;padding:0}
 .hint2{margin:0;font-size:12px;color:var(--muted);line-height:1.4}
 #brushName2 em{font-style:normal;color:var(--accent);font-size:12px}
 
@@ -320,9 +325,9 @@ const PRESETS=[
   {id:'double',name:'קו כפול',size:36,smoothing:30,heads:[
     {softness:5,spacing:4,pSize:30,minSize:40,scale:28,offY:-34},
     {softness:5,spacing:4,pSize:30,minSize:40,scale:28,offY:34}]},
-  {id:'glow',name:'קו עם הילה',size:40,smoothing:25,heads:[
-    {softness:5,spacing:4,pSize:60,minSize:30,scale:30},
-    {softness:100,spacing:6,flow:70,pSize:20,scale:150,strength:60}]},
+  {id:'glow',name:'עט זוהר',size:40,smoothing:25,heads:[
+    {softness:100,spacing:6,flow:70,pSize:20,scale:150,strength:60},
+    {softness:5,spacing:4,pSize:60,minSize:30,scale:30}]},
   {id:'rough',name:'מכחול מחוספס',size:40,smoothing:15,heads:[
     {softness:35,spacing:5,pSize:40,minSize:30},
     {shape:'chalk',grain:85,softness:25,spacing:8,angleJitter:100,scale:90,scatter:25,mode:'mask'}]}
@@ -330,7 +335,7 @@ const PRESETS=[
 // A brush = settings for the whole stroke + 1–3 heads. Each head has its own tip and behaviour,
 // can sit off the line, and is combined with the heads before it by its mode.
 const BRUSH_KEYS=['size','opacity','overlap','smoothing'];
-const HEAD_DEF={scale:100,offX:0,offY:0,offRel:'direction',mode:'add',strength:100};
+const HEAD_DEF={scale:100,offX:0,offY:0,offRel:'direction',mode:'add',strength:100,colorMode:'current',color:'#e5484d'};
 const MAX_HEADS=3;
 function headOf(f){const h={...HEAD_DEF};for(const k in DEF)if(!BRUSH_KEYS.includes(k))h[k]=f[k];if(f.tipId){h.tipId=f.tipId;h.tipData=f.tipData;}return h;}
 function norm(src){ // preset / saved brush / older flat brush → {size,opacity,overlap,smoothing,heads:[…]}
@@ -361,7 +366,8 @@ function mask(shape,soft,grain){
       const nx=(px+.5)/N*2-1,ny=(py+.5)/N*2-1;
       const dist=shape==='square'?Math.max(Math.abs(nx),Math.abs(ny)):Math.hypot(nx,ny);
       let a=Math.min(1,Math.max(0,(1-dist)/fw));
-      if(soft>=3){a=a*a*(3-2*a);a=Math.pow(a,1+soft/100);} // eased feather that gets airier as softness rises; linear AA for the hard edge
+      // feather = an even fade from transparent at the rim to solid toward the centre; the outer diameter never changes,
+      // more softness only moves the start of the fade inward
       if(shape==='chalk'){if(hash(px/6|0,py/6|0)<Math.max(g,.5)*.7)a*=.06;}
       else if(g>0)a*=1-g*rng();
       const i=(py*N+px)*4;d[i]=d[i+1]=d[i+2]=255;d[i+3]=a*255;
@@ -419,14 +425,18 @@ function composite(bufs,r,s,target,base){
   const img=base.getImageData(x0,y0,w,h),d=img.data;
   const op=s.b.opacity/100,t=(s.b.overlap??100)/100,[R,G,Bc]=rgb(s.erase?'#000':s.color);
   const Fs=bufs.map(b=>b.f),Ms=bufs.map(b=>b.m),str=s.b.heads.map(h=>h.strength/100),md=s.b.heads.map(h=>MODES[h.mode]||0);
+  const hc=s.b.heads.map(h=>!s.erase&&h.colorMode==='own'&&h.color?rgb(h.color):[R,G,Bc]);
   for(let yy=0;yy<h;yy++){const row=(y0+yy)*W+x0;
    for(let xx=0;xx<w;xx++){
-    const k=row+xx;let a=0;
-    for(let hh=0;hh<n;hh++){
+    const k=row+xx;let a=0,cr=R,cg=G,cb=Bc;
+    for(let hh=0;hh<n;hh++){const c=hc[hh];
       // ink of this head: accumulated density, or its strongest single dab (keeps hard edges crisp); one full pass = 1
       const g=Math.max(Fs[hh][k],Ms[hh][k]),ah=g>1e-4?Math.min(1,(1-Math.exp(-g))/.9975)*str[hh]:0;
-      if(hh===0){a=ah;continue;}
-      switch(md[hh]){case 0:a=a+ah-a*ah;break;case 1:a=a*ah;break;case 2:a=a*(1-ah);break;default:if(ah>a)a=ah;}
+      if(hh===0){a=ah;cr=c[0];cg=c[1];cb=c[2];continue;}
+      switch(md[hh]){
+        case 0:{const na=a+ah-a*ah;if(na>0){const w1=ah/na,w0=1-w1;cr=c[0]*w1+cr*w0;cg=c[1]*w1+cg*w0;cb=c[2]*w1+cb*w0;}a=na;break;} // later head on top
+        case 1:a=a*ah;break;case 2:a=a*(1-ah);break;
+        default:if(ah>a){a=ah;cr=c[0];cg=c[1];cb=c[2];}}
     }
     if(a<=1e-4)continue;
     const sa=op*a,i=(yy*w+xx)*4;
@@ -435,7 +445,7 @@ function composite(bufs,r,s,target,base){
     const e=da>=1?0:Math.max(0,(sa-da)/(1-da));      // just enough to reach max(da, sa)
     const ea=t*sa+(1-t)*e;if(ea<=0)continue;
     const A=ea+da*(1-ea),kk=da*(1-ea);
-    d[i]=(R*ea+d[i]*kk)/A;d[i+1]=(G*ea+d[i+1]*kk)/A;d[i+2]=(Bc*ea+d[i+2]*kk)/A;d[i+3]=A*255;
+    d[i]=(cr*ea+d[i]*kk)/A;d[i+1]=(cg*ea+d[i+1]*kk)/A;d[i+2]=(cb*ea+d[i+2]*kk)/A;d[i+3]=A*255;
   }}
   target.putImageData(img,x0,y0);
   bufs.forEach(b=>grow(b,x0,y0,x1,y1));
@@ -463,6 +473,9 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull){
 // Places dabs along a stroke. Deterministic for a given stroke (seeded), so undo/redraw reproduces it exactly.
 function stamper(buf,b,seed,scale){
   const rng=mulberry(seed),T=tipData(b),needDir=b.offRel==='direction'&&(b.offX||b.offY);let pending=null;
+  // the line's direction is averaged over a short distance, so tiny pen wobbles don't flip
+  // direction-following tips and offsets (that flipping caused spikes in tight turns)
+  let sdx=0,sdy=0;const dirLen=Math.max(6,b.size*.6);
   const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true;
   const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
   const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-p));
@@ -484,7 +497,8 @@ function stamper(buf,b,seed,scale){
     first(p){if(needDir)pending=p;else stamp(p.x,p.y,p.p,p.az,0,0);},
     seg(a,q){
       const dx=q.x-a.x,dy=q.y-a.y,dist=Math.hypot(dx,dy);if(dist<.01)return;
-      const dir=Math.atan2(dy,dx);let tt=0,carry=rem;
+      const k=sdx||sdy?Math.min(1,dist/dirLen):1;sdx=sdx*(1-k)+dx/dist*k;sdy=sdy*(1-k)+dy/dist*k;
+      const dir=Math.atan2(sdy,sdx);let tt=0,carry=rem;
       if(pending){stamp(pending.x,pending.y,pending.p,pending.az,dir,0);pending=null;}
       while(true){
         const f0=tt/dist,p0=a.p+(q.p-a.p)*f0;
@@ -662,6 +676,8 @@ const SPEC=[
   ['strength','עוצמה',0,100,'%','h'],['scale','גודל יחסי',5,200,'%','h'],
   ['offX','הזזה קדימה',-150,150,'%','h'],['offY','הזזה לצד',-150,150,'%','h'],
   ['offRel','ההזזה לפי',[['direction','כיוון הקו'],['fixed','קבועה']],null,null,'h'],
+  ['colorMode','צבע הראש',[['current','הצבע הנוכחי'],['own','צבע משלו']],null,null,'h'],
+  ['headColor'],
   ['gh','קצה'],
   ['flow','זרימה',1,100,'%','h'],['softness','רכות',0,100,'%','h'],['spacing','מרווח',1,100,'%','h'],
   ['gh','צורה'],
@@ -680,6 +696,9 @@ SPEC.forEach(([k,label,a,b2,unit,sc])=>{
   if(k==='g'){const d=document.createElement('div');d.className='sec';d.textContent=label;ctls.appendChild(d);return;}
   if(k==='gh'){const d=document.createElement('div');d.className='sec';d.dataset.label=label;ctls.appendChild(d);headSecs.push(d);return;}
   if(k==='heads'){const d=document.createElement('div');d.className='heads';d.id='headTabs';ctls.appendChild(d);return;}
+  if(k==='headColor'){const row=document.createElement('label');row.className='segrow';row.id='headColorRow';
+    row.innerHTML='<span>הצבע שלו</span><input type="color" id="headColor" aria-label="צבע הראש">';ctls.appendChild(row);
+    row.querySelector('input').oninput=e=>{B.heads[curHead].color=e.target.value;changed();};return;}
   if(k==='modeHint'){const p=document.createElement('p');p.className='hint2';p.id='modeHint';ctls.appendChild(p);return;}
   if(Array.isArray(a)){
     const row=document.createElement('div');row.className='segrow';row.innerHTML='<span>'+label+'</span>';
@@ -696,13 +715,22 @@ SPEC.forEach(([k,label,a,b2,unit,sc])=>{
 });
 function renderHeads(){
   const box=$('headTabs');box.innerHTML='';
-  B.heads.forEach((h,i)=>{const b=document.createElement('button');b.textContent='ראש '+(i+1);b.className=i===curHead?'on':'';
-    b.onclick=()=>{curHead=i;syncCtls();};box.appendChild(b);});
+  B.heads.forEach((h,i)=>{const b=document.createElement('button');b.className='chip'+(i===curHead?' on':'');
+    b.setAttribute('aria-label','ערוך את ראש '+(i+1));
+    const cv=document.createElement('canvas');const lab=document.createElement('span');lab.textContent='ראש '+(i+1);b.append(cv,lab);
+    if(B.heads.length>1){const x=document.createElement('span');x.className='hx';x.textContent='✕';x.setAttribute('role','button');
+      x.setAttribute('aria-label','מחק את ראש '+(i+1));
+      x.onclick=e=>{e.stopPropagation();B.heads.splice(i,1);if(curHead>=B.heads.length)curHead=B.heads.length-1;else if(curHead>i)curHead--;
+        B.heads[0].mode='add';changed();};b.appendChild(x);}
+    b.onclick=()=>{curHead=i;syncCtls();};box.appendChild(b);
+    requestAnimationFrame(()=>{const r=cv.getBoundingClientRect();if(!r.width)return;const s=window.devicePixelRatio||1;
+      cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);
+      const one={...B,size:r.height*.8/Math.max(.05,h.scale/100),heads:[{...h,offX:0,offY:0,mode:'add',strength:100}]};
+      renderStroke(cv.getContext('2d'),{b:one,color:erasing?inkCol():color,erase:false,seed:7,pts:[{x:r.width/2,y:r.height/2,p:1,az:null}]},s,[makeBuf(cv.width,cv.height)]);});
+  });
   if(B.heads.length<MAX_HEADS){const add=document.createElement('button');add.textContent='+ ראש';add.className='add';
     add.onclick=()=>{const h={...B.heads[curHead],mode:'add',strength:100,offY:(B.heads[curHead].offY||0)+40};
       B.heads.push(h);curHead=B.heads.length-1;changed();};box.appendChild(add);}
-  if(B.heads.length>1){const del=document.createElement('button');del.textContent='מחק ראש '+(curHead+1);del.className='del';
-    del.onclick=()=>{B.heads.splice(curHead,1);curHead=Math.max(0,curHead-1);if(curHead===0&&B.heads[0])B.heads[0].mode='add';changed();};box.appendChild(del);}
 }
 function syncCtls(){
   if(curHead>=B.heads.length)curHead=0;
@@ -714,7 +742,8 @@ function syncCtls(){
   inputs.mode.row.hidden=curHead===0;$('modeHint').hidden=curHead===0;$('modeHint').textContent=MODE_HINT[H.mode]||'';
   const many=B.heads.length>1;
   headSecs.forEach(d=>d.textContent=(many?'ראש '+(curHead+1)+' · ':'')+d.dataset.label);
-  headSecs[0].hidden=!many;['strength','scale','offX','offY','offRel'].forEach(k=>inputs[k].row.hidden=!many);
+  headSecs[0].hidden=!many;['strength','scale','offX','offY','offRel','colorMode'].forEach(k=>inputs[k].row.hidden=!many);
+  $('headColorRow').hidden=!many||H.colorMode!=='own';$('headColor').value=H.color||'#e5484d';
   renderHeads();
   $('size').value=B.size;
   const src=allBrushes().find(x=>x.id===bid);
