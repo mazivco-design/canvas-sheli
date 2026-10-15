@@ -344,11 +344,12 @@ function mask(shape,soft,grain){
 const tipMasks=new Map(); // custom tips drawn by the user: tipId -> 128px white+alpha canvas
 function loadTip(id,data,cb){const im=new Image();im.onload=()=>{const c=document.createElement('canvas');c.width=c.height=128;
   c.getContext('2d').drawImage(im,0,0,128,128);tipMasks.set(id,c);cb&&cb();};im.src=data;}
-// ---- Stroke buffers ----
-// A stroke is built in a greyscale buffer (black = empty, white = full) with the 'lighten' blend, so where dabs
-// overlap each pixel keeps the strongest dab instead of piling up. That keeps the tip's feather visible
-// along the whole stroke. Flow < 100 makes each dab move only part of the way up, so paint builds up.
-// The grey is then turned into colour + alpha for the dirty area only.
+// ---- Stroke engine ----
+// Each stroke is built as an "ink density" map (floating point, one value per pixel). Every dab adds density,
+// like ink soaking into paper. Along the path the dab density is scaled by the spacing, so a stroke always
+// shows the tip's own edge profile no matter how dense the dabs are, and where a stroke meets itself the
+// densities simply add up, so soft edges merge smoothly with no creases.
+// Visible alpha = opacity × (1 − e^(−density)): the core saturates at the stroke opacity, feathers blend.
 function tip(b,col){ // coloured tip, used for the single-dab view
   const custom=b.shape==='custom'&&tipMasks.has(b.tipId);
   const key=(custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain)+'|'+col;if(tipCache.has(key))return tipCache.get(key);
@@ -356,81 +357,101 @@ function tip(b,col){ // coloured tip, used for the single-dab view
   const x=c.getContext('2d');x.drawImage(m,0,0);x.globalCompositeOperation='source-in';x.fillStyle=col;x.fillRect(0,0,c.width,c.height);
   if(tipCache.size>80)tipCache.clear();tipCache.set(key,c);return c;
 }
-const grayCache=new Map();
-function grayTip(b,lvl){ // opaque: black background, tip brightness = mask × level/16
+const grayCache=new Map(); // tip alpha arrays
+function tipData(b){
   const custom=b.shape==='custom'&&tipMasks.has(b.tipId);
-  const key=(custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain)+'|'+lvl;if(grayCache.has(key))return grayCache.get(key);
-  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain);
-  const c=document.createElement('canvas');c.width=c.height=m.width;const x=c.getContext('2d');
-  x.fillStyle='#000';x.fillRect(0,0,c.width,c.height);x.globalAlpha=lvl/16;x.drawImage(m,0,0);
-  if(grayCache.size>200)grayCache.clear();grayCache.set(key,c);return c;
+  const key=custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain;if(grayCache.has(key))return grayCache.get(key);
+  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain),N=m.width;
+  const d=m.getContext('2d',{willReadFrequently:true}).getImageData(0,0,N,N).data,a=new Float32Array(N*N);
+  // store density, not alpha: a dab of density a' shows exactly the tip's own alpha (so the feather looks right)
+  const L=-Math.log(1-.9975);for(let i=0;i<a.length;i++)a[i]=-Math.log(1-.9975*d[i*4+3]/255)/L;
+  let F=0;for(let y=0;y<N;y++){let s=0;for(let x=0;x<N;x++)s+=a[y*N+x];if(s>F)F=s;} // widest line through the tip
+  const T={N,a,F:Math.max(1e-3,F*2/N)}; // F = line integral across the tip, in units of the radius
+  if(grayCache.size>60)grayCache.clear();grayCache.set(key,T);return T;
 }
-function makeBuf(w,h){
-  const g=document.createElement('canvas');g.width=w;g.height=h;
-  const gx=g.getContext('2d',{willReadFrequently:true});gx.fillStyle='#000';gx.fillRect(0,0,w,h);
-  return{g,gx,used:null};
-}
-function sizeBuf(buf,w,h){buf.g.width=w;buf.g.height=h;buf.gx=buf.g.getContext('2d',{willReadFrequently:true});
-  buf.gx.fillStyle='#000';buf.gx.fillRect(0,0,w,h);buf.used=null;}
+function makeBuf(w,h){return{W:w,H:h,f:new Float32Array(w*h),m:new Float32Array(w*h),used:null};}
+function sizeBuf(buf,w,h){buf.W=w;buf.H=h;buf.f=new Float32Array(w*h);buf.m=new Float32Array(w*h);buf.used=null;}
 function resetBuf(buf){ // wipe only what the previous stroke touched
-  const u=buf.used;if(u){buf.gx.setTransform(1,0,0,1,0,0);buf.gx.globalAlpha=1;buf.gx.globalCompositeOperation='source-over';
-    buf.gx.fillStyle='#000';buf.gx.fillRect(u.x0,u.y0,u.x1-u.x0,u.y1-u.y0);}
+  const u=buf.used;if(u){for(let y=u.y0;y<u.y1;y++){buf.f.fill(0,y*buf.W+u.x0,y*buf.W+u.x1);buf.m.fill(0,y*buf.W+u.x0,y*buf.W+u.x1);}}
   buf.used=null;
 }
+function grow(buf,x0,y0,x1,y1){const u=buf.used;buf.used=u?{x0:Math.min(u.x0,x0),y0:Math.min(u.y0,y0),x1:Math.max(u.x1,x1),y1:Math.max(u.y1,y1)}:{x0,y0,x1,y1};}
 const rgbCache=new Map(),rgbCv=document.createElement('canvas');rgbCv.width=rgbCv.height=1;
 function rgb(col){if(rgbCache.has(col))return rgbCache.get(col);const x=rgbCv.getContext('2d',{willReadFrequently:true});
   x.clearRect(0,0,1,1);x.fillStyle=col;x.fillRect(0,0,1,1);const d=x.getImageData(0,0,1,1).data,v=[d[0],d[1],d[2]];rgbCache.set(col,v);return v;}
-// Paints the stroke (grey buffer) onto target inside rect r, reading the pixels underneath from base.
+// Paints the stroke onto target inside rect r, reading the pixels underneath from base.
 // Overlap (0–100) decides what happens where the stroke crosses paint already on the layer:
 //   100 = normal glazing, each pass darkens;  0 = paint only tops up to the stroke's own opacity, never darker.
 function composite(buf,r,s,target,base){
-  if(!r)return;const W=buf.g.width,H=buf.g.height;
+  if(!r)return;const W=buf.W,H=buf.H;
   const x0=Math.max(0,Math.floor(r.x0)),y0=Math.max(0,Math.floor(r.y0)),x1=Math.min(W,Math.ceil(r.x1)),y1=Math.min(H,Math.ceil(r.y1));
   const w=x1-x0,h=y1-y0;if(w<=0||h<=0)return;
-  const g=buf.gx.getImageData(x0,y0,w,h).data,img=base.getImageData(x0,y0,w,h),d=img.data;
-  const op=s.b.opacity/100/255,t=(s.b.overlap??100)/100,[R,G,Bc]=rgb(s.erase?'#000':s.color);
-  for(let i=0;i<d.length;i+=4){
-    const sa=g[i]*op;if(sa<=0)continue;
+  const F=buf.f,M=buf.m,img=base.getImageData(x0,y0,w,h),d=img.data;
+  const op=s.b.opacity/100,t=(s.b.overlap??100)/100,[R,G,Bc]=rgb(s.erase?'#000':s.color);
+  for(let yy=0;yy<h;yy++){const row=(y0+yy)*W+x0;
+   for(let xx=0;xx<w;xx++){
+    const g=Math.max(F[row+xx],M[row+xx]);if(g<=1e-4)continue; // accumulated ink, or the strongest single dab (keeps hard edges crisp)
+    const sa=op*Math.min(1,(1-Math.exp(-g))/.9975),i=(yy*w+xx)*4; // one full pass = exactly the stroke opacity
     const da=d[i+3]/255;
     if(s.erase){d[i+3]=Math.round(da*(1-sa)*255);continue;}
     const e=da>=1?0:Math.max(0,(sa-da)/(1-da));      // just enough to reach max(da, sa)
     const ea=t*sa+(1-t)*e;if(ea<=0)continue;
     const A=ea+da*(1-ea),k=da*(1-ea);
     d[i]=(R*ea+d[i]*k)/A;d[i+1]=(G*ea+d[i+1]*k)/A;d[i+2]=(Bc*ea+d[i+2]*k)/A;d[i+3]=A*255;
-  }
+  }}
   target.putImageData(img,x0,y0);
-  const u=buf.used;buf.used=u?{x0:Math.min(u.x0,x0),y0:Math.min(u.y0,y0),x1:Math.max(u.x1,x1),y1:Math.max(u.y1,y1)}:{x0,y0,x1,y1};
+  grow(buf,x0,y0,x1,y1);
+}
+// Adds one dab's density to the buffer (software rasteriser: rotation, roundness, bilinear tip sampling).
+function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull){
+  const W=buf.W,H=buf.H,F=buf.f,M=buf.m,N=T.N,A=T.a,c=Math.cos(ang),si=Math.sin(ang),ir=1/r,ird=1/(r*rd),half=N/2;
+  const x0=Math.max(0,Math.floor(cx-r)),x1=Math.min(W,Math.ceil(cx+r)+1),y0=Math.max(0,Math.floor(cy-r)),y1=Math.min(H,Math.ceil(cy+r)+1);
+  if(x1<=x0||y1<=y0)return null;
+  const ss=r<3?2:1,step=1/ss,off=step/2,wgt=D/(ss*ss),wf=Dfull/(ss*ss);
+  for(let py=y0;py<y1;py++)for(let px=x0;px<x1;px++){
+    let acc=0;
+    for(let sy=0;sy<ss;sy++)for(let sx=0;sx<ss;sx++){
+      const dx=px+off+sx*step-cx,dy=py+off+sy*step-cy;
+      const u=(c*dx+si*dy)*ir,v=(-si*dx+c*dy)*ird;if(u<=-1||u>=1||v<=-1||v>=1)continue;
+      const tx=(u+1)*half-.5,ty=(v+1)*half-.5;let ix=Math.floor(tx),iy=Math.floor(ty);const fx=tx-ix,fy=ty-iy;
+      const ix1=Math.min(N-1,ix+1),iy1=Math.min(N-1,iy+1);ix=Math.max(0,ix);iy=Math.max(0,iy);
+      const a0=A[iy*N+ix],a1=A[iy*N+ix1],a2=A[iy1*N+ix],a3=A[iy1*N+ix1];
+      acc+=(a0+(a1-a0)*fx)*(1-fy)+(a2+(a3-a2)*fx)*fy;
+    }
+    if(acc>0){const k=py*W+px;F[k]+=acc*wgt;const v=acc*wf;if(v>M[k])M[k]=v;}
+  }
+  return{x0,y0,x1,y1};
 }
 // Places dabs along a stroke. Deterministic for a given stroke (seeded), so undo/redraw reproduces it exactly.
 function stamper(buf,s,scale){
-  const ctx=buf.gx,b=s.b,rng=mulberry(s.seed);
-  const rd=b.roundness/100,baseAng=b.angle*Math.PI/180;let rem=0,dirty=null;
+  const b=s.b,rng=mulberry(s.seed),T=tipData(b);
+  const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true;
+  const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
   const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-p));
-  function stamp(x,y,p,az,dir){
+  function stamp(x,y,p,az,dir,step){
     const sz=b.size*pf(p)*(1-b.sizeJitter/100*rng());
-    const lvl=Math.max(1,Math.round(16*(1-b.pOpacity/100*(1-p))));
+    const lvl=1-b.pOpacity/100*(1-p);
     const ang=baseAng+(b.angleSrc==='direction'?dir:(b.angleSrc==='tilt'&&az!=null?az:0))+(rng()-.5)*2*Math.PI*b.angleJitter/100;
     if(b.scatter){const rr=b.scatter/100*b.size*rng(),th=rng()*2*Math.PI;x+=Math.cos(th)*rr;y+=Math.sin(th)*rr;}
-    const r=Math.max(.35,sz/2)*scale,c=Math.cos(ang),si=Math.sin(ang),cx=x*scale,cy=y*scale,e=r*1.42+2;
-    ctx.globalAlpha=Math.min(1,Math.max(.01,b.flow/100));
-    ctx.setTransform(c,si,-si*rd,c*rd,cx,cy);
-    ctx.drawImage(grayTip(b,lvl),-r,-r,2*r,2*r);
-    dirty=dirty?{x0:Math.min(dirty.x0,cx-e),y0:Math.min(dirty.y0,cy-e),x1:Math.max(dirty.x1,cx+e),y1:Math.max(dirty.y1,cy+e)}:{x0:cx-e,y0:cy-e,x1:cx+e,y1:cy+e};
+    const r=Math.max(.6,sz/2*scale);
+    // first dab is full strength (so a tap leaves a solid dot); later dabs share the density along the path
+    const D=Dt*lvl*(first?1:Math.min(1,step*scale/(T.F*r)));first=false;
+    const box=rasterDab(buf,T,x*scale,y*scale,r,ang,rd,D,Dt*lvl);
+    if(box)dirty=dirty?{x0:Math.min(dirty.x0,box.x0),y0:Math.min(dirty.y0,box.y0),x1:Math.max(dirty.x1,box.x1),y1:Math.max(dirty.y1,box.y1)}:box;
   }
   return{
-    first(p){ctx.globalCompositeOperation='lighten';stamp(p.x,p.y,p.p,p.az,0);ctx.setTransform(1,0,0,1,0,0);},
+    first(p){stamp(p.x,p.y,p.p,p.az,0,0);},
     seg(a,q){
       const dx=q.x-a.x,dy=q.y-a.y,dist=Math.hypot(dx,dy);if(dist<.01)return;
       const dir=Math.atan2(dy,dx);let tt=0,carry=rem;
-      ctx.globalCompositeOperation='lighten';
       while(true){
         const f0=tt/dist,p0=a.p+(q.p-a.p)*f0;
         const step=Math.max(.5,b.spacing/100*b.size*pf(p0)),need=step-carry;
         if(tt+need>dist){carry+=dist-tt;break;}
         tt+=need;carry=0;const f=tt/dist;
-        stamp(a.x+dx*f,a.y+dy*f,a.p+(q.p-a.p)*f,q.az,dir);
+        stamp(a.x+dx*f,a.y+dy*f,a.p+(q.p-a.p)*f,q.az,dir,step);
       }
-      rem=carry;ctx.setTransform(1,0,0,1,0,0);
+      rem=carry;
     },
     take(){const d=dirty;dirty=null;return d;}
   };
