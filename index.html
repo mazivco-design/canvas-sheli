@@ -110,6 +110,11 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 #brushes footer .row{display:flex;gap:6px}
 #brushes footer input{flex:1;min-width:0;font:inherit;font-size:14px;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:0 10px;height:38px;-webkit-user-select:text;user-select:text}
 #brushes footer button{height:38px;border:1px solid var(--line);font-size:13px}
+.heads{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.heads button{height:34px;min-width:0;padding:0 12px;border:1px solid var(--line);font-size:13px;border-radius:9px}
+.heads button.add{color:var(--accent);border-style:dashed}
+.heads button.del{color:var(--muted);margin-inline-start:auto}
+.hint2{margin:0;font-size:12px;color:var(--muted);line-height:1.4}
 #brushName2 em{font-style:normal;color:var(--accent);font-size:12px}
 
 /* brush-tip editor */
@@ -311,8 +316,32 @@ const PRESETS=[
   {id:'chalk',name:'גיר',size:22,flow:80,softness:30,spacing:12,shape:'chalk',grain:75,angleJitter:100,pSize:40,pOpacity:50,smoothing:10},
   {id:'spray',name:'ספריי',size:45,flow:70,spacing:20,shape:'spray',scatter:15,angleJitter:100,pSize:20,pOpacity:60,smoothing:0},
   {id:'callig',name:'קליגרפיה',size:18,spacing:2,roundness:18,angle:40,pSize:60,minSize:20,smoothing:30},
-  {id:'square',name:'מכחול מרובע',size:24,softness:15,spacing:6,shape:'square',angleSrc:'direction',pSize:40,pOpacity:30,grain:20}
+  {id:'square',name:'מכחול מרובע',size:24,softness:15,spacing:6,shape:'square',angleSrc:'direction',pSize:40,pOpacity:30,grain:20},
+  {id:'double',name:'קו כפול',size:36,smoothing:30,heads:[
+    {softness:5,spacing:4,pSize:30,minSize:40,scale:28,offY:-34},
+    {softness:5,spacing:4,pSize:30,minSize:40,scale:28,offY:34}]},
+  {id:'glow',name:'קו עם הילה',size:40,smoothing:25,heads:[
+    {softness:5,spacing:4,pSize:60,minSize:30,scale:30},
+    {softness:100,spacing:6,flow:70,pSize:20,scale:150,strength:60}]},
+  {id:'rough',name:'מכחול מחוספס',size:40,smoothing:15,heads:[
+    {softness:35,spacing:5,pSize:40,minSize:30},
+    {shape:'chalk',grain:85,softness:25,spacing:8,angleJitter:100,scale:90,scatter:25,mode:'mask'}]}
 ];
+// A brush = settings for the whole stroke + 1–3 heads. Each head has its own tip and behaviour,
+// can sit off the line, and is combined with the heads before it by its mode.
+const BRUSH_KEYS=['size','opacity','overlap','smoothing'];
+const HEAD_DEF={scale:100,offX:0,offY:0,offRel:'direction',mode:'add',strength:100};
+const MAX_HEADS=3;
+function headOf(f){const h={...HEAD_DEF};for(const k in DEF)if(!BRUSH_KEYS.includes(k))h[k]=f[k];if(f.tipId){h.tipId=f.tipId;h.tipData=f.tipData;}return h;}
+function norm(src){ // preset / saved brush / older flat brush → {size,opacity,overlap,smoothing,heads:[…]}
+  const f={...DEF,...src},b={};BRUSH_KEYS.forEach(k=>b[k]=f[k]);
+  const base=headOf(DEF);
+  b.heads=src.heads?src.heads.map(h=>({...base,...h})):[headOf(f)];
+  return b;
+}
+const cloneB=b=>({...b,heads:b.heads.map(h=>({...h}))});
+const headBrush=(b,i)=>({...b.heads[i],size:b.size*b.heads[i].scale/100,master:b.size});
+
 function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 const hash=(x,y)=>{const s=Math.sin(x*127.1+y*311.7)*43758.5453;return s-Math.floor(s);};
 
@@ -382,25 +411,34 @@ function rgb(col){if(rgbCache.has(col))return rgbCache.get(col);const x=rgbCv.ge
 // Paints the stroke onto target inside rect r, reading the pixels underneath from base.
 // Overlap (0–100) decides what happens where the stroke crosses paint already on the layer:
 //   100 = normal glazing, each pass darkens;  0 = paint only tops up to the stroke's own opacity, never darker.
-function composite(buf,r,s,target,base){
-  if(!r)return;const W=buf.W,H=buf.H;
+const MODES={add:0,mask:1,sub:2,max:3};
+function composite(bufs,r,s,target,base){
+  if(!r)return;const buf=bufs[0],W=buf.W,H=buf.H,n=bufs.length;
   const x0=Math.max(0,Math.floor(r.x0)),y0=Math.max(0,Math.floor(r.y0)),x1=Math.min(W,Math.ceil(r.x1)),y1=Math.min(H,Math.ceil(r.y1));
   const w=x1-x0,h=y1-y0;if(w<=0||h<=0)return;
-  const F=buf.f,M=buf.m,img=base.getImageData(x0,y0,w,h),d=img.data;
+  const img=base.getImageData(x0,y0,w,h),d=img.data;
   const op=s.b.opacity/100,t=(s.b.overlap??100)/100,[R,G,Bc]=rgb(s.erase?'#000':s.color);
+  const Fs=bufs.map(b=>b.f),Ms=bufs.map(b=>b.m),str=s.b.heads.map(h=>h.strength/100),md=s.b.heads.map(h=>MODES[h.mode]||0);
   for(let yy=0;yy<h;yy++){const row=(y0+yy)*W+x0;
    for(let xx=0;xx<w;xx++){
-    const g=Math.max(F[row+xx],M[row+xx]);if(g<=1e-4)continue; // accumulated ink, or the strongest single dab (keeps hard edges crisp)
-    const sa=op*Math.min(1,(1-Math.exp(-g))/.9975),i=(yy*w+xx)*4; // one full pass = exactly the stroke opacity
+    const k=row+xx;let a=0;
+    for(let hh=0;hh<n;hh++){
+      // ink of this head: accumulated density, or its strongest single dab (keeps hard edges crisp); one full pass = 1
+      const g=Math.max(Fs[hh][k],Ms[hh][k]),ah=g>1e-4?Math.min(1,(1-Math.exp(-g))/.9975)*str[hh]:0;
+      if(hh===0){a=ah;continue;}
+      switch(md[hh]){case 0:a=a+ah-a*ah;break;case 1:a=a*ah;break;case 2:a=a*(1-ah);break;default:if(ah>a)a=ah;}
+    }
+    if(a<=1e-4)continue;
+    const sa=op*a,i=(yy*w+xx)*4;
     const da=d[i+3]/255;
     if(s.erase){d[i+3]=Math.round(da*(1-sa)*255);continue;}
     const e=da>=1?0:Math.max(0,(sa-da)/(1-da));      // just enough to reach max(da, sa)
     const ea=t*sa+(1-t)*e;if(ea<=0)continue;
-    const A=ea+da*(1-ea),k=da*(1-ea);
-    d[i]=(R*ea+d[i]*k)/A;d[i+1]=(G*ea+d[i+1]*k)/A;d[i+2]=(Bc*ea+d[i+2]*k)/A;d[i+3]=A*255;
+    const A=ea+da*(1-ea),kk=da*(1-ea);
+    d[i]=(R*ea+d[i]*kk)/A;d[i+1]=(G*ea+d[i+1]*kk)/A;d[i+2]=(Bc*ea+d[i+2]*kk)/A;d[i+3]=A*255;
   }}
   target.putImageData(img,x0,y0);
-  grow(buf,x0,y0,x1,y1);
+  bufs.forEach(b=>grow(b,x0,y0,x1,y1));
 }
 // Adds one dab's density to the buffer (software rasteriser: rotation, roundness, bilinear tip sampling).
 function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull){
@@ -423,8 +461,8 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull){
   return{x0,y0,x1,y1};
 }
 // Places dabs along a stroke. Deterministic for a given stroke (seeded), so undo/redraw reproduces it exactly.
-function stamper(buf,s,scale){
-  const b=s.b,rng=mulberry(s.seed),T=tipData(b);
+function stamper(buf,b,seed,scale){
+  const rng=mulberry(seed),T=tipData(b),needDir=b.offRel==='direction'&&(b.offX||b.offY);let pending=null;
   const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true;
   const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
   const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-p));
@@ -432,6 +470,8 @@ function stamper(buf,s,scale){
     const sz=b.size*pf(p)*(1-b.sizeJitter/100*rng());
     const lvl=1-b.pOpacity/100*(1-p);
     const ang=baseAng+(b.angleSrc==='direction'?dir:(b.angleSrc==='tilt'&&az!=null?az:0))+(rng()-.5)*2*Math.PI*b.angleJitter/100;
+    if(b.offX||b.offY){let ox=b.offX/100*b.master,oy=b.offY/100*b.master;
+      if(b.offRel==='direction'){const c=Math.cos(dir),sn=Math.sin(dir);[ox,oy]=[ox*c-oy*sn,ox*sn+oy*c];}x+=ox;y+=oy;}
     if(b.scatter){const rr=b.scatter/100*b.size*rng(),th=rng()*2*Math.PI;x+=Math.cos(th)*rr;y+=Math.sin(th)*rr;}
     const r=Math.max(.6,sz/2*scale);
     // first dab is full strength (so a tap leaves a solid dot); later dabs share the density along the path
@@ -440,10 +480,12 @@ function stamper(buf,s,scale){
     if(box)dirty=dirty?{x0:Math.min(dirty.x0,box.x0),y0:Math.min(dirty.y0,box.y0),x1:Math.max(dirty.x1,box.x1),y1:Math.max(dirty.y1,box.y1)}:box;
   }
   return{
-    first(p){stamp(p.x,p.y,p.p,p.az,0,0);},
+    // an offset that follows the line needs the line's direction, so the first dab waits for the first movement
+    first(p){if(needDir)pending=p;else stamp(p.x,p.y,p.p,p.az,0,0);},
     seg(a,q){
       const dx=q.x-a.x,dy=q.y-a.y,dist=Math.hypot(dx,dy);if(dist<.01)return;
       const dir=Math.atan2(dy,dx);let tt=0,carry=rem;
+      if(pending){stamp(pending.x,pending.y,pending.p,pending.az,dir,0);pending=null;}
       while(true){
         const f0=tt/dist,p0=a.p+(q.p-a.p)*f0;
         const step=Math.max(.5,b.spacing/100*b.size*pf(p0)),need=step-carry;
@@ -453,19 +495,26 @@ function stamper(buf,s,scale){
       }
       rem=carry;
     },
+    finish(){if(pending){stamp(pending.x,pending.y,pending.p,pending.az,0,0);pending=null;}},
     take(){const d=dirty;dirty=null;return d;}
   };
 }
-function renderStroke(target,s,scale,buf){
-  resetBuf(buf);
-  const st=stamper(buf,s,scale);st.first(s.pts[0]);for(let i=1;i<s.pts.length;i++)st.seg(s.pts[i-1],s.pts[i]);
-  composite(buf,st.take(),s,target,target);
+const uni=(a,b)=>!a?b:!b?a:{x0:Math.min(a.x0,b.x0),y0:Math.min(a.y0,b.y0),x1:Math.max(a.x1,b.x1),y1:Math.max(a.y1,b.y1)};
+// heads need one buffer each; full-size buffers are made only when a brush with that many heads is used
+let bufW=1,bufH=1;const pool=[];
+function bufsFor(n){while(pool.length<n)pool.push(makeBuf(bufW,bufH));return pool.slice(0,n);}
+function renderStroke(target,s,scale,bufs){
+  const n=s.b.heads.length;bufs=bufs||bufsFor(n);let rect=null;
+  for(let i=0;i<n;i++){
+    resetBuf(bufs[i]);const st=stamper(bufs[i],headBrush(s.b,i),s.seed+i*7919,scale);
+    st.first(s.pts[0]);for(let j=1;j<s.pts.length;j++)st.seg(s.pts[j-1],s.pts[j]);st.finish();rect=uni(rect,st.take());
+  }
+  composite(bufs.slice(0,n),rect,s,target,target);
 }
 
 // =================== LAYERS ===================
 let layers=[],active=null,nextNum=1,history=[],future=[],cur=null,activeId=null,st=null,lastRaw=null;
 const snap=document.createElement('canvas');let snapX=snap.getContext('2d',{willReadFrequently:true});
-const liveBuf=makeBuf(1,1),redrawBuf=makeBuf(1,1);
 function makeLayer(name,strokes=[]){const c=document.createElement('canvas');
   return{name:name||('שכבה '+nextNum++),canvas:c,ctx:c.getContext('2d',{willReadFrequently:true}),strokes,visible:true,opacity:1,thumb:null};}
 function fit(c){const r=stack.getBoundingClientRect();c.width=Math.round(r.width*dpr);c.height=Math.round(r.height*dpr);}
@@ -480,9 +529,9 @@ const idx=L=>layers.indexOf(L);
 function redrawLayer(L){
   const c=L.ctx;c.setTransform(1,0,0,1,0,0);c.globalCompositeOperation='source-over';c.globalAlpha=1;
   c.clearRect(0,0,L.canvas.width,L.canvas.height);
-  L.strokes.forEach(s=>renderStroke(c,s,dpr,redrawBuf));updThumb(L);
+  L.strokes.forEach(s=>renderStroke(c,s,dpr));updThumb(L);
 }
-function fitBufs(){const r=stack.getBoundingClientRect(),w=Math.round(r.width*dpr),h=Math.round(r.height*dpr);sizeBuf(liveBuf,w,h);sizeBuf(redrawBuf,w,h);fit(snap);snapX=snap.getContext('2d',{willReadFrequently:true});}
+function fitBufs(){const r=stack.getBoundingClientRect(),w=Math.round(r.width*dpr),h=Math.round(r.height*dpr);bufW=w;bufH=h;pool.forEach(b=>sizeBuf(b,w,h));fit(snap);snapX=snap.getContext('2d',{willReadFrequently:true});}
 function resize(){dpr=window.devicePixelRatio||1;fitBufs();layers.forEach(L=>{fit(L.canvas);redrawLayer(L);});}
 window.addEventListener('resize',resize);
 
@@ -524,17 +573,18 @@ function smooth(q){ // streamline: lag the point toward the pen
   const pts=cur.pts,last=pts[pts.length-1],k=cur.b.smoothing/100*.9;
   return{x:last.x+(q.x-last.x)*(1-k),y:last.y+(q.y-last.y)*(1-k),p:last.p+(q.p-last.p)*(1-k*.5),az:q.az};
 }
-function liveUpdate(){composite(liveBuf,st.take(),cur,active.ctx,snapX);}
+function liveUpdate(){let r=null;st.forEach(t=>r=uni(r,t.take()));composite(cur.bufs,r,cur,active.ctx,snapX);}
 stack.addEventListener('pointerdown',e=>{
   if(!allowed(e)||activeId!==null)return;
   e.preventDefault();
   if(!active.visible){toast('השכבה מוסתרת – הפעל את העין כדי לצייר');return;}
   activeId=e.pointerId;stack.setPointerCapture(e.pointerId);
   const p=raw(e);lastRaw=p;
-  cur={b:{...B},color,erase:erasing,seed:(Math.random()*2**31)|0,pts:[p]};
-  resetBuf(liveBuf);
+  cur={b:cloneB(B),color,erase:erasing,seed:(Math.random()*2**31)|0,pts:[p]};
+  const bufs=bufsFor(cur.b.heads.length);bufs.forEach(resetBuf);
   snapX.setTransform(1,0,0,1,0,0);snapX.globalAlpha=1;snapX.globalCompositeOperation='copy';snapX.drawImage(active.canvas,0,0);snapX.globalCompositeOperation='source-over';
-  st=stamper(liveBuf,cur,dpr);st.first(p);liveUpdate();
+  st=cur.b.heads.map((h,i)=>stamper(bufs[i],headBrush(cur.b,i),cur.seed+i*7919,dpr));st.forEach(t=>t.first(p));
+  Object.defineProperty(cur,'bufs',{value:bufs,enumerable:false,writable:true});liveUpdate();
 });
 stack.addEventListener('pointermove',e=>{
   if(e.pointerType==='pen')$('pr').textContent=Math.round(e.pressure*100)+'%';
@@ -543,7 +593,7 @@ stack.addEventListener('pointermove',e=>{
   const evs=e.getCoalescedEvents?e.getCoalescedEvents():[];
   for(const ev of(evs.length?evs:[e])){
     const r=raw(ev);lastRaw=r;const q=smooth(r);
-    st.seg(cur.pts[cur.pts.length-1],q);cur.pts.push(q);
+    st.forEach(t=>t.seg(cur.pts[cur.pts.length-1],q));cur.pts.push(q);
   }
   liveUpdate();
 });
@@ -551,8 +601,8 @@ function end(e){
   if(e.pointerId!==activeId)return;activeId=null;
   if(!cur)return;
   // let the smoothed line catch up to where the pen lifted
-  if(cur.b.smoothing>0&&lastRaw&&cur.pts.length>1){const q={...lastRaw,p:cur.pts[cur.pts.length-1].p};st.seg(cur.pts[cur.pts.length-1],q);cur.pts.push(q);}
-  liveUpdate();
+  if(cur.b.smoothing>0&&lastRaw&&cur.pts.length>1){const q={...lastRaw,p:cur.pts[cur.pts.length-1].p};st.forEach(t=>t.seg(cur.pts[cur.pts.length-1],q));cur.pts.push(q);}
+  st.forEach(t=>t.finish());liveUpdate();
   active.strokes.push(cur);push({type:'stroke',layer:active,stroke:cur});updThumb(active);cur=null;st=null;
 }
 stack.addEventListener('pointerup',end);stack.addEventListener('pointercancel',end);
@@ -595,47 +645,77 @@ $('lyMerge').onclick=()=>{const i=idx(active);if(i<=0)return;const Bl=layers[i-1
 $('lyOp').oninput=e=>{active.opacity=e.target.value/100;$('lyOpV').textContent=e.target.value+'%';mount();};
 
 // =================== BRUSH PANEL ===================
-let B={...DEF,...PRESETS[0]},bid='round',modified=false,customs=[];
+let B=norm(PRESETS[0]),bid='round',modified=false,customs=[],curHead=0;
 try{customs=JSON.parse(localStorage.getItem('pencil-brushes')||'[]');}catch(e){customs=[];}
 function persist(){try{localStorage.setItem('pencil-brushes',JSON.stringify(customs));}catch(e){toast('לא הצלחתי לשמור את המברשות בדפדפן');}}
 const allBrushes=()=>PRESETS.concat(customs);
+const MODE_HINT={add:'שני הראשים מציירים יחד',mask:'טקסטורה: יש צבע רק איפה שהראש הזה והראשים שלפניו נוגעים',
+  sub:'הראש הזה מוחק מתוך הראשים שלפניו',max:'בכל נקודה נשאר החזק מביניהם, בלי להצטבר'};
+// [key, label, min|options, max, unit, scope]  scope b = whole brush, h = current head
 const SPEC=[
-  ['g','בסיס'],
-  ['size','גודל',1,120,'px'],['opacity','שקיפות',1,100,'%'],['flow','זרימה',1,100,'%'],
-  ['softness','רכות',0,100,'%'],['spacing','מרווח',1,100,'%'],
-  ['g','צורה'],
-  ['shape','צורת קצה',[['round','עגול'],['square','מרובע'],['chalk','גיר'],['spray','ספריי'],['custom','ציור']]],
-  ['roundness','עגלגלות',5,100,'%'],['angle','זווית',0,180,'°'],
-  ['angleSrc','הזווית לפי',[['fixed','קבועה'],['direction','כיוון הקו'],['tilt','הטיית העט']]],
-  ['grain','גרעיניות',0,100,'%'],
-  ['g','אקראיות'],
-  ['scatter','פיזור',0,200,'%'],['sizeJitter','שינוי גודל',0,100,'%'],['angleJitter','סיבוב',0,100,'%'],
-  ['g','חפיפה בין קווים'],
-  ['overlap','הכהיה בחפיפה',0,100,'%'],
-  ['g','עט ולחץ'],
-  ['pSize','לחץ ← גודל',0,100,'%'],['pOpacity','לחץ ← שקיפות',0,100,'%'],['minSize','גודל מינימלי',0,100,'%'],['smoothing','החלקת קו',0,95,'%']
+  ['g','המברשת כולה'],
+  ['size','גודל',1,120,'px','b'],['opacity','שקיפות',1,100,'%','b'],['overlap','הכהיה בחפיפה',0,100,'%','b'],['smoothing','החלקת קו',0,95,'%','b'],
+  ['heads'],
+  ['gh','מיקום וחיבור'],
+  ['mode','מתחבר לראשים שלפניו',[['add','הוספה'],['mask','מסכה'],['sub','חיסור'],['max','החזק']],null,null,'h'],
+  ['modeHint'],
+  ['strength','עוצמה',0,100,'%','h'],['scale','גודל יחסי',5,200,'%','h'],
+  ['offX','הזזה קדימה',-150,150,'%','h'],['offY','הזזה לצד',-150,150,'%','h'],
+  ['offRel','ההזזה לפי',[['direction','כיוון הקו'],['fixed','קבועה']],null,null,'h'],
+  ['gh','קצה'],
+  ['flow','זרימה',1,100,'%','h'],['softness','רכות',0,100,'%','h'],['spacing','מרווח',1,100,'%','h'],
+  ['gh','צורה'],
+  ['shape','צורת קצה',[['round','עגול'],['square','מרובע'],['chalk','גיר'],['spray','ספריי'],['custom','ציור']],null,null,'h'],
+  ['roundness','עגלגלות',5,100,'%','h'],['angle','זווית',0,180,'°','h'],
+  ['angleSrc','הזווית לפי',[['fixed','קבועה'],['direction','כיוון הקו'],['tilt','הטיית העט']],null,null,'h'],
+  ['grain','גרעיניות',0,100,'%','h'],
+  ['gh','אקראיות'],
+  ['scatter','פיזור',0,200,'%','h'],['sizeJitter','שינוי גודל',0,100,'%','h'],['angleJitter','סיבוב',0,100,'%','h'],
+  ['gh','עט ולחץ'],
+  ['pSize','לחץ ← גודל',0,100,'%','h'],['pOpacity','לחץ ← שקיפות',0,100,'%','h'],['minSize','גודל מינימלי',0,100,'%','h']
 ];
-const ctls=$('ctls'),inputs={};
-SPEC.forEach(([k,label,a,b2,unit])=>{
+const ctls=$('ctls'),inputs={},headSecs=[];
+const tgt=sc=>sc==='b'?B:B.heads[curHead];
+SPEC.forEach(([k,label,a,b2,unit,sc])=>{
   if(k==='g'){const d=document.createElement('div');d.className='sec';d.textContent=label;ctls.appendChild(d);return;}
+  if(k==='gh'){const d=document.createElement('div');d.className='sec';d.dataset.label=label;ctls.appendChild(d);headSecs.push(d);return;}
+  if(k==='heads'){const d=document.createElement('div');d.className='heads';d.id='headTabs';ctls.appendChild(d);return;}
+  if(k==='modeHint'){const p=document.createElement('p');p.className='hint2';p.id='modeHint';ctls.appendChild(p);return;}
   if(Array.isArray(a)){
     const row=document.createElement('div');row.className='segrow';row.innerHTML='<span>'+label+'</span>';
     const seg=document.createElement('div');seg.className='seg';
     a.forEach(([v,t])=>{const btn=document.createElement('button');btn.textContent=t;btn.dataset.v=v;
-      btn.onclick=()=>{B[k]=v;changed();};seg.appendChild(btn);});
-    row.appendChild(seg);ctls.appendChild(row);inputs[k]={seg};return;
+      btn.onclick=()=>{tgt(sc)[k]=v;changed();};seg.appendChild(btn);});
+    row.appendChild(seg);ctls.appendChild(row);inputs[k]={seg,row,sc};return;
   }
   const row=document.createElement('label');row.className='ctl';
   row.innerHTML='<span>'+label+'</span><input type="range" id="b_'+k+'" min="'+a+'" max="'+b2+'"><output></output>';
   const inp=row.querySelector('input'),out=row.querySelector('output');
-  inp.oninput=()=>{B[k]=+inp.value;out.textContent=inp.value+unit;changed(k);};
-  ctls.appendChild(row);inputs[k]={inp,out,unit};
+  inp.oninput=()=>{tgt(sc)[k]=+inp.value;out.textContent=inp.value+unit;changed(k);};
+  ctls.appendChild(row);inputs[k]={inp,out,unit,row,sc};
 });
+function renderHeads(){
+  const box=$('headTabs');box.innerHTML='';
+  B.heads.forEach((h,i)=>{const b=document.createElement('button');b.textContent='ראש '+(i+1);b.className=i===curHead?'on':'';
+    b.onclick=()=>{curHead=i;syncCtls();};box.appendChild(b);});
+  if(B.heads.length<MAX_HEADS){const add=document.createElement('button');add.textContent='+ ראש';add.className='add';
+    add.onclick=()=>{const h={...B.heads[curHead],mode:'add',strength:100,offY:(B.heads[curHead].offY||0)+40};
+      B.heads.push(h);curHead=B.heads.length-1;changed();};box.appendChild(add);}
+  if(B.heads.length>1){const del=document.createElement('button');del.textContent='מחק ראש '+(curHead+1);del.className='del';
+    del.onclick=()=>{B.heads.splice(curHead,1);curHead=Math.max(0,curHead-1);if(curHead===0&&B.heads[0])B.heads[0].mode='add';changed();};box.appendChild(del);}
+}
 function syncCtls(){
-  for(const k in inputs){const c=inputs[k];
-    if(c.seg)c.seg.querySelectorAll('button').forEach(b=>{b.classList.toggle('on',b.dataset.v===B[k]);
-      if(b.dataset.v==='custom')b.hidden=!B.tipId;});
-    else{c.inp.value=B[k];c.out.textContent=B[k]+c.unit;}}
+  if(curHead>=B.heads.length)curHead=0;
+  const H=B.heads[curHead];
+  for(const k in inputs){const c=inputs[k],o=tgt(c.sc);
+    if(c.seg)c.seg.querySelectorAll('button').forEach(b=>{b.classList.toggle('on',b.dataset.v===o[k]);
+      if(b.dataset.v==='custom')b.hidden=!H.tipId;});
+    else{c.inp.value=o[k];c.out.textContent=o[k]+c.unit;}}
+  inputs.mode.row.hidden=curHead===0;$('modeHint').hidden=curHead===0;$('modeHint').textContent=MODE_HINT[H.mode]||'';
+  const many=B.heads.length>1;
+  headSecs.forEach(d=>d.textContent=(many?'ראש '+(curHead+1)+' · ':'')+d.dataset.label);
+  headSecs[0].hidden=!many;['strength','scale','offX','offY','offRel'].forEach(k=>inputs[k].row.hidden=!many);
+  renderHeads();
   $('size').value=B.size;
   const src=allBrushes().find(x=>x.id===bid);
   $('brushName2').innerHTML=(src?src.name:'מברשת')+(modified?' <em>· שונתה</em>':'');
@@ -646,25 +726,25 @@ function syncCtls(){
 let prevT;
 function changed(k){modified=true;syncCtls();clearTimeout(prevT);prevT=setTimeout(drawPreview,k==='size'?60:20);}
 function selectBrush(id){const src=allBrushes().find(x=>x.id===id);if(!src)return;
-  B={...DEF,...src};delete B.id;delete B.name;bid=id;modified=false;syncCtls();drawPreview();renderLib();}
+  B=norm(src);bid=id;curHead=0;modified=false;syncCtls();drawPreview();renderLib();}
 function demo(w,h,b,cap){
-  const sz=Math.min(b.size,cap),pad=sz/2+6,pts=[];
+  const ext=Math.max(...b.heads.map(x=>x.scale/100+Math.abs(x.offY)/50)),sz=Math.min(b.size,cap/Math.max(1,ext)),pad=sz*Math.max(1,ext)/2+6,pts=[];
   for(let t=0;t<=1.0001;t+=.01)pts.push({x:pad+t*(w-2*pad),y:h/2+Math.sin(t*Math.PI*2)*h*.2,p:.15+.85*Math.sin(t*Math.PI),az:.8});
   return{b:{...b,size:sz},color:null,erase:false,seed:7,pts};
 }
 function paintDemo(cv,b,col,cap){
   const r=cv.getBoundingClientRect();if(!r.width)return;const s=window.devicePixelRatio||1;
   cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);
-  const buf=makeBuf(cv.width,cv.height);
-  const d=demo(r.width,r.height,b,cap);d.color=col;renderStroke(cv.getContext('2d'),d,s,buf);
+  const bufs=b.heads.map(()=>makeBuf(cv.width,cv.height));
+  const d=demo(r.width,r.height,b,cap);d.color=col;renderStroke(cv.getContext('2d'),d,s,bufs);
 }
 const inkCol=()=>getComputedStyle(document.body).color;
-function drawTipView(col){ // one dab, large, so the feather is easy to judge
+function drawTipView(col){ // one dab of every head, large, so the feather and the layout are easy to judge
   const cv=$('tipView'),r=cv.getBoundingClientRect();if(!r.width)return;const s=window.devicePixelRatio||1;
-  cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);const x=cv.getContext('2d');
-  const R=cv.width*.42,rd=B.roundness/100,ang=B.angle*Math.PI/180,c=Math.cos(ang),si=Math.sin(ang);
-  x.globalAlpha=B.opacity/100;x.setTransform(c,si,-si*rd,c*rd,cv.width/2,cv.height/2);
-  x.drawImage(tip(B,col),-R,-R,2*R,2*R);x.setTransform(1,0,0,1,0,0);
+  cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);
+  const ext=Math.max(...B.heads.map(h=>h.scale/200+Math.hypot(h.offX,h.offY)/100*(h.offX||h.offY?1:0))),size=r.width*.45/Math.max(.05,ext);
+  const bufs=B.heads.map(()=>makeBuf(cv.width,cv.height));
+  renderStroke(cv.getContext('2d'),{b:{...B,size},color:col,erase:false,seed:7,pts:[{x:r.width/2,y:r.height/2,p:1,az:null}]},s,bufs);
 }
 function drawPreview(){if($('brushes').hidden)return;const col=erasing?inkCol():color;paintDemo($('prev'),B,col,64);drawTipView(col);}
 function renderLib(){
@@ -682,16 +762,16 @@ function renderLib(){
       t.appendChild(x);
     }
     lib.appendChild(t);
-    requestAnimationFrame(()=>paintDemo(t.querySelector('canvas'),{...DEF,...br},ink,14));
+    requestAnimationFrame(()=>paintDemo(t.querySelector('canvas'),norm(br),ink,14));
   });
 }
 $('brSave').onclick=()=>{
   const name=$('brNewName').value.trim()||('המברשת שלי '+(customs.length+1));
-  const nb={...B,id:'c'+Date.now(),name};customs.push(nb);persist();$('brNewName').value='';
+  const nb={...cloneB(B),id:'c'+Date.now(),name};customs.push(nb);persist();$('brNewName').value='';
   bid=nb.id;modified=false;renderLib();syncCtls();toast('המברשת "'+name+'" נשמרה');
 };
 $('brNewName').onkeydown=e=>{if(e.key==='Enter')$('brSave').click();};
-$('brUpdate').onclick=()=>{const c=customs.find(x=>x.id===bid);if(!c)return;Object.assign(c,B);persist();modified=false;renderLib();syncCtls();toast('המברשת עודכנה');};
+$('brUpdate').onclick=()=>{const c=customs.find(x=>x.id===bid);if(!c)return;for(const k in c)if(k!=='id'&&k!=='name')delete c[k];Object.assign(c,cloneB(B));persist();modified=false;renderLib();syncCtls();toast('המברשת עודכנה');};
 $('brReset').onclick=()=>{if(bid)selectBrush(bid);};
 
 // =================== BRUSH-TIP EDITOR ===================
@@ -743,7 +823,7 @@ function padToMask(){
   m.getContext('2d').drawImage(t,x0,y0,bw,bh,64-bw*s/2,64-bh*s/2,bw*s,bh*s);
   return m;
 }
-function teBrush(){return{...B,shape:'custom',tipId:'__preview',spacing:Math.max(B.spacing,20)};}
+function teBrush(){const h=B.heads[curHead];return{...B,heads:[{...h,scale:100,offX:0,offY:0,mode:'add',strength:100,shape:'custom',tipId:'__preview',spacing:Math.max(h.spacing,20)}]};}
 function teChanged(){clearTimeout(teT);teT=setTimeout(()=>{
   const m=padToMask(),mc=$('teMask'),s=window.devicePixelRatio||1,r=mc.getBoundingClientRect();
   mc.width=r.width*s;mc.height=r.height*s;const x=mc.getContext('2d');x.clearRect(0,0,mc.width,mc.height);
@@ -778,8 +858,8 @@ $('teCreate').onclick=()=>{
   const m=padToMask();if(!m){toast('צייר משהו קודם');return;}
   const id='t'+Date.now(),data=m.toDataURL('image/png');tipMasks.set(id,m);
   const name=$('teName').value.trim()||('ראש מברשת '+(customs.filter(c=>c.tipId).length+1));
-  B={...B,shape:'custom',tipId:id,tipData:data,spacing:Math.max(B.spacing,20)};
-  const nb={...B,id:'c'+Date.now(),name};customs.push(nb);persist();
+  B=cloneB(B);Object.assign(B.heads[curHead],{shape:'custom',tipId:id,tipData:data,spacing:Math.max(B.heads[curHead].spacing,20)});
+  const nb={...cloneB(B),id:'c'+Date.now(),name};customs.push(nb);persist();
   bid=nb.id;modified=false;$('tipEditor').hidden=true;
   if($('brushes').hidden)setPanel($('brushes'),$('brushBtn'),true);
   setErase(false);renderLib();syncCtls();drawPreview();toast('המברשת "'+name+'" נוצרה');
@@ -808,7 +888,7 @@ COLORS.forEach((c,i)=>{const b=document.createElement('button');b.className='sw'
 $('custom').oninput=e=>selColor(e.target.value,null);
 const dot=$('dot');
 function updDot(){const d=Math.max(3,Math.min(28,B.size*.6+2));dot.style.width=dot.style.height=d+'px';
-  dot.style.background=erasing?'var(--muted)':color;dot.style.borderRadius=B.shape==='square'?'3px':'50%';}
+  dot.style.background=erasing?'var(--muted)':color;dot.style.borderRadius=B.heads[0].shape==='square'?'3px':'50%';}
 $('size').oninput=e=>{B.size=+e.target.value;changed('size');};
 $('clear').onclick=()=>{
   if(!active.strokes.length)return;
@@ -883,7 +963,7 @@ dpr=window.devicePixelRatio||1;fitBufs();
 const r=stack.getBoundingClientRect();
 const first=makeLayer();insertLayer(first,0);active=first;
 if(r.width<800){setPanel($('layers'),$('lyToggle'),false);setPanel($('brushes'),$('brushBtn'),false);}
-customs.forEach(c=>{if(c.tipId&&c.tipData)loadTip(c.tipId,c.tipData,()=>{tipCache.clear();grayCache.clear();renderLib();drawPreview();});});
+customs.forEach(c=>(c.heads||[c]).forEach(h=>{if(h.tipId&&h.tipData)loadTip(h.tipId,h.tipData,()=>{tipCache.clear();grayCache.clear();renderLib();drawPreview();});}));
 updUndo();renderLayers();syncCtls();renderLib();drawPreview();placeAll();
 })();
 </script>
