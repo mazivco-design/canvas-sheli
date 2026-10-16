@@ -25,6 +25,9 @@
 :root[data-theme="dark"]{--desk:#121315;--paper:#1c1d20;--ink:#e9e7e1;--dock:#2a2b2f;--line:#3a3b40;--accent:#6d9cf0;--muted:#9a9ca3;--check:#33343a;color-scheme:dark}
 [hidden]{display:none!important}
 html,body{height:100%;overflow:hidden}
+/* no double-tap zoom on panels and buttons (iPad Safari ignores user-scalable=no) */
+html,body,.panel,.dock,button,input,label{touch-action:manipulation}
+input[type=range]{touch-action:none}
 body{background:var(--paper);color:var(--ink);font-family:var(--font);
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
 #wrap{position:relative;height:100%;overflow:hidden;background:var(--desk)}
@@ -832,7 +835,10 @@ function feeder(emit){const P=[];
 let startPending=false;
 function beginStroke(){startPending=false;const p=cur.pts[0];st.forEach(t=>t.first(p));fd.push(p);}
 function liveUpdate(){let r=null;st.forEach(t=>r=uni(r,t.take()));composite(cur.bufs,r,cur,active.ctx,snapX);}
+// is a panel, the dock or any control on top of the canvas at this point? (then the pen is aimed at it, not at the drawing)
+function overUI(e){const t=document.elementFromPoint(e.clientX,e.clientY);return!!(t&&t!==stack&&!stack.contains(t)&&t.closest('.panel,.dock,button,input,label,header,#status,.pill'));}
 stack.addEventListener('pointerdown',e=>{
+  if(overUI(e))return;
   if(picking){e.preventDefault();picking=false;const sel=pickAt(raw(e));if(sel)openShare(sel);else toast('לא נמצאה משיכה כאן');return;}
   if(!allowed(e)||activeId!==null||gest)return;
   e.preventDefault();
@@ -1437,7 +1443,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-16e';
+const APP_BUILD='2026-10-16f';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1577,6 +1583,23 @@ makeMovable(dockEl,$('dockGrip'));
 makeMovable($('colors'),$('colors').querySelector('header'));
 makeMovable($('nav'),$('nav').querySelector('header'));
 makeMovable($('penPanel'),$('penPanel').querySelector('header'));
+// Sliders follow the pen or finger from wherever it lands on the track (iPad Safari only moves a slider
+// when its small knob is grabbed exactly, so a pen tap on the track did nothing or reached the canvas)
+document.addEventListener('pointerdown',e=>{
+  const inp=e.target;if(e.pointerType==='mouse'||!(inp instanceof HTMLInputElement)||inp.type!=='range'||inp.disabled)return;
+  e.preventDefault();e.stopPropagation();const id=e.pointerId;try{inp.setPointerCapture(id);}catch(_){}
+  const rtl=getComputedStyle(inp).direction==='rtl',min=+inp.min||0,max=+(inp.max||100),stp=+inp.step||1;
+  const go=ev=>{const r=inp.getBoundingClientRect(),k=11;let f=(ev.clientX-r.left-k)/Math.max(1,r.width-2*k);
+    f=Math.min(1,Math.max(0,f));if(rtl)f=1-f;const v=Math.round((min+f*(max-min))/stp)*stp;
+    if(+inp.value!==v){inp.value=v;inp.dispatchEvent(new Event('input',{bubbles:true}));}};
+  go(e);
+  const mv=ev=>{if(ev.pointerId===id){ev.preventDefault();go(ev);}};
+  const up=ev=>{if(ev.pointerId!==id)return;inp.removeEventListener('pointermove',mv);inp.removeEventListener('pointerup',up);inp.removeEventListener('pointercancel',up);
+    inp.dispatchEvent(new Event('change',{bubbles:true}));};
+  inp.addEventListener('pointermove',mv);inp.addEventListener('pointerup',up);inp.addEventListener('pointercancel',up);
+},true);
+// pinch-zooming the whole page (instead of the canvas) is blocked everywhere
+['gesturestart','gesturechange','dblclick'].forEach(t=>document.addEventListener(t,e=>{if(!(e.target instanceof HTMLInputElement&&e.target.type==='text'))e.preventDefault();},{passive:false}));
 // =================== PEN PRESSURE ===================
 // Safari reports Apple Pencil pressure on a scale where even a firm press tops out around 60–70%.
 // "Full pressure at" maps that point to 100%, and the feel curve makes light pressure count for more or less.
