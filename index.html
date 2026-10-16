@@ -180,6 +180,17 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 #zoomPill{font-variant-numeric:tabular-nums}
 
 /* navigator */
+#penPanel{right:max(16px,env(safe-area-inset-right,0px));width:280px}
+.pn{padding:0 12px 12px;display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+#penPad{height:110px;border:2px dashed var(--line);border-radius:14px;display:grid;place-items:center;text-align:center;font-size:14px;color:var(--muted);touch-action:none;-webkit-user-select:none;user-select:none}
+#penPad.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent);color:var(--ink)}
+.pn-bars{display:grid;gap:6px}
+.pn-bar{display:grid;grid-template-columns:70px minmax(0,1fr) 44px;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.pn-bar i{display:block;height:10px;border-radius:5px;background:var(--check);overflow:hidden}
+.pn-bar u{display:block;height:100%;width:0;background:var(--accent);text-decoration:none}
+.pn-bar b{color:var(--ink);font-variant-numeric:tabular-nums;font-weight:500}
+.pn .ctl{grid-template-columns:86px minmax(0,1fr) 44px}
+.pn .wide{height:36px;border:1px solid var(--line);font-size:13px}
 #nav{right:max(16px,env(safe-area-inset-right,0px));top:auto;bottom:calc(110px + env(safe-area-inset-bottom,0px));width:270px}
 .nv{padding:0 12px 12px;display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-width:0}
 #navCv{width:100%;max-width:100%;aspect-ratio:1.4;border-radius:10px;background:var(--desk);touch-action:none;cursor:move;display:block}
@@ -218,7 +229,7 @@ input[type=range]{width:110px;accent-color:var(--accent)}
       <button class="pill" id="shareBtn" title="תמונה עם המשיכה וכל הפרמטרים שלה, לשליחה ל-Claude">שתף לבדיקה</button>
       <button class="pill" id="navToggle" aria-expanded="false" title="ניווט: זום וסיבוב">ניווט</button>
       <button class="pill" id="zoomPill" hidden title="חזרה לתצוגה רגילה">100%</button>
-      <div class="pill" id="status">עט: <b id="penState">לא זוהה עדיין</b> · לחץ <b id="pr">–</b></div>
+      <button class="pill" id="status" aria-expanded="false" title="הגדרות עט וכיול לחץ">עט: <b id="penState">לא זוהה עדיין</b> · לחץ <b id="pr">–</b></button>
     </div>
     <div class="pill"><label><input type="checkbox" id="penOnly" checked> רק עט</label></div>
   </div>
@@ -241,6 +252,24 @@ input[type=range]{width:110px;accent-color:var(--accent)}
         <button id="lyMerge">מזג למטה</button>
       </div>
     </footer>
+  </aside>
+
+  <aside id="penPanel" class="panel" aria-label="הגדרות עט" hidden>
+    <header>
+      <span>הגדרות עט</span>
+      <div class="grp"><button id="penClose" aria-label="סגור"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    </header>
+    <div class="pn">
+      <div id="penPad" aria-label="משטח כיול">לחץ כאן עם העט<br><b>הכי חזק שנוח לך</b></div>
+      <div class="pn-bars">
+        <div class="pn-bar"><span>מהעט</span><i><u id="pnRaw"></u></i><b id="pnRawV">–</b></div>
+        <div class="pn-bar"><span>אחרי כיול</span><i><u id="pnOut"></u></i><b id="pnOutV">–</b></div>
+      </div>
+      <label class="ctl"><span>לחץ מלא ב-</span><input type="range" id="penMax" min="20" max="100" value="65"><output id="penMaxV">65%</output></label>
+      <label class="ctl"><span>תחושה</span><input type="range" id="penCurve" min="-100" max="100" value="0"><output id="penCurveV">רגיל</output></label>
+      <p class="hint2">תחושה רכה: גם נגיעה קלה נותנת הרבה. קשה: צריך ללחוץ יותר.</p>
+      <button id="penReset" class="wide">איפוס</button>
+    </div>
   </aside>
 
   <aside id="nav" class="panel" aria-label="ניווט" hidden>
@@ -732,7 +761,7 @@ function allowed(e){
 }
 function raw(e){ // pen position in canvas pixels (undoing zoom, pan and rotation)
   const w=wrapG.getBoundingClientRect(),c=toCanvas({x:e.clientX-w.left,y:e.clientY-w.top});
-  let p=e.pointerType==='pen'?e.pressure:0.6, az=null;
+  let p=e.pointerType==='pen'?mapPressure(e.pressure):0.6, az=null;
   if(typeof e.azimuthAngle==='number'&&e.pointerType==='pen')az=e.azimuthAngle;
   else if(e.tiltX||e.tiltY)az=Math.atan2(e.tiltY,e.tiltX);
   if(az!=null)az-=view.r; // pen tilt measured against the canvas, not the screen
@@ -771,7 +800,7 @@ stack.addEventListener('pointerdown',e=>{
   Object.defineProperty(cur,'bufs',{value:bufs,enumerable:false,writable:true});liveUpdate();
 });
 stack.addEventListener('pointermove',e=>{
-  if(e.pointerType==='pen')$('pr').textContent=Math.round(e.pressure*100)+'%';
+  if(e.pointerType==='pen')showPressure(e.pressure);
   if(e.pointerId!==activeId||!cur)return;
   e.preventDefault();
   const evs=e.getCoalescedEvents?e.getCoalescedEvents():[];
@@ -1448,6 +1477,36 @@ makeMovable($('brushes'),$('brushes').querySelector('header'));
 makeMovable(dockEl,$('dockGrip'));
 makeMovable($('colors'),$('colors').querySelector('header'));
 makeMovable($('nav'),$('nav').querySelector('header'));
+makeMovable($('penPanel'),$('penPanel').querySelector('header'));
+// =================== PEN PRESSURE ===================
+// Safari reports Apple Pencil pressure on a scale where even a firm press tops out around 60–70%.
+// "Full pressure at" maps that point to 100%, and the feel curve makes light pressure count for more or less.
+let penMax=.65,penCurve=0;
+try{const v=JSON.parse(localStorage.getItem('pencil-pen')||'null');if(v){penMax=v.max||.65;penCurve=v.curve||0;}}catch(_){}
+function savePen(){try{localStorage.setItem('pencil-pen',JSON.stringify({max:penMax,curve:penCurve}));}catch(_){}}
+function mapPressure(raw){const n=Math.min(1,Math.max(0,raw/penMax));return Math.pow(n,Math.pow(2,-penCurve/50));}
+function syncPen(){$('penMax').value=Math.round(penMax*100);$('penMaxV').textContent=Math.round(penMax*100)+'%';
+  $('penCurve').value=penCurve;$('penCurveV').textContent=penCurve>10?'רכה':penCurve<-10?'קשה':'רגיל';}
+function showPressure(raw){const out=mapPressure(raw);
+  $('pr').textContent=Math.round(out*100)+'%';
+  if(!$('penPanel').hidden){$('pnRaw').style.width=raw*100+'%';$('pnRawV').textContent=Math.round(raw*100)+'%';
+    $('pnOut').style.width=out*100+'%';$('pnOutV').textContent=Math.round(out*100)+'%';}}
+$('penMax').oninput=e=>{penMax=e.target.value/100;syncPen();savePen();};
+$('penCurve').oninput=e=>{penCurve=+e.target.value;syncPen();savePen();};
+$('penReset').onclick=()=>{penMax=.65;penCurve=0;syncPen();savePen();};
+// calibration pad: the hardest comfortable press becomes 100%
+let padMax=0;const pp=$('penPad');
+pp.addEventListener('pointerdown',e=>{if(e.pointerType!=='pen'){toast('הכיול עובד עם העט');return;}e.preventDefault();padMax=0;pp.classList.add('on');try{pp.setPointerCapture(e.pointerId);}catch(_){}});
+pp.addEventListener('pointermove',e=>{if(e.pointerType!=='pen'||!pp.classList.contains('on'))return;e.preventDefault();
+  padMax=Math.max(padMax,e.pressure);showPressure(e.pressure);});
+const padUp=e=>{if(!pp.classList.contains('on'))return;pp.classList.remove('on');
+  if(padMax>.05){penMax=Math.min(1,Math.max(.2,padMax*.95));syncPen();savePen();toast('כויל: '+Math.round(padMax*100)+'% מהעט = לחץ מלא');}};
+pp.addEventListener('pointerup',padUp);pp.addEventListener('pointercancel',padUp);
+['touchstart','touchmove'].forEach(t=>pp.addEventListener(t,e=>e.preventDefault(),{passive:false}));
+$('status').onclick=()=>{const p=$('penPanel'),open=p.hidden;setPanel(p,$('status'),open);syncPen();};
+$('penClose').onclick=()=>setPanel($('penPanel'),$('status'),false);
+syncPen();
+
 function placeAll(){for(const id in placements){const el=$(id);if(el&&!el.hidden)placeEl(el,placements[id]);}}
 window.addEventListener('resize',placeAll);
 // panels that were hidden get placed when they open
