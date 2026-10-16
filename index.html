@@ -443,7 +443,7 @@ let color=COLORS[0], erasing=false, smudging=false, tool='draw', dpr=1;
 // =================== BRUSH ENGINE ===================
 const DEF={size:6,opacity:100,flow:100,softness:0,spacing:5,shape:'round',roundness:100,angle:0,angleSrc:'fixed',
   grain:0,overlap:100,cross:'off',gap:25,shadow:50,scatter:0,sizeJitter:0,angleJitter:0,pSize:70,pOpacity:0,minSize:10,smoothing:20,
-  cSize:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0,opJitter:0,flowJitter:0,fadeLen:0,fadeOpacity:100,fadeSize:0,smudge:70};
+  cSize:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0,opJitter:0,flowJitter:0,fadeLen:0,fadeOpacity:100,fadeSize:0,smudge:70,taperStart:0,taperEnd:0,taperMin:0,taperOpacity:0};
 const PRESETS=[
   {id:'round',name:'עגול בסיסי',size:30,softness:0,spacing:4,pSize:0,pOpacity:0,minSize:100,smoothing:15},
   {id:'pencil',name:'עיפרון',size:4,opacity:90,flow:60,softness:30,spacing:10,shape:'chalk',grain:45,pSize:50,pOpacity:80,minSize:30,angleJitter:100,smoothing:15},
@@ -688,7 +688,13 @@ function stamper(buf,b,seed,scale){
   // fade: over the first fadeLen px of the stroke the brush thins out / dies away, then stays at that level
   const fadeOn=(b.fadeLen||0)>0,fk=()=>fadeOn?Math.max(0,1-sA/b.fadeLen):1;
   const fSz=()=>fadeOn?Math.max(.02,1-(b.fadeSize||0)/100*(1-fk())):1;
-  const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-pc(p,b.cSize)))*fSz();
+  // taper: the line grows from a point over the first taperStart px and narrows to a point over the last
+  // taperEnd px. The end needs the stroke's length, so it is drawn once the pen lifts (b.total).
+  const tot=b.total??Infinity,tS0=b.taperStart||0,tE0=b.taperEnd||0,taperOn=(tS0>0||tE0>0)&&!(tot<2);
+  const tFit=tot<Infinity&&tS0+tE0>tot?tot/(tS0+tE0):1,tS=tS0*tFit,tE=tot<Infinity?tE0*tFit:0;let sP=0,lpx=null,lpy=null;
+  const tk=()=>{let k=1;if(tS>0)k=Math.min(k,sP/tS);if(tE>0)k=Math.min(k,(tot-sP)/tE);k=Math.min(1,Math.max(0,k));return 1-(1-k)*(1-k);};
+  const tSz=()=>taperOn?(b.taperMin||0)/100+(1-(b.taperMin||0)/100)*tk():1;
+  const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-pc(p,b.cSize)))*fSz()*tSz();
   // its own seeded sequence, so a brush without these jitters draws exactly as before
   const jrng=mulberry(seed^0x27d4eb2d);buf.oj=null;
   // Opacity (by pressure, jitter or fade) is a level the pixel shows at most, like Photoshop's opacity:
@@ -703,6 +709,7 @@ function stamper(buf,b,seed,scale){
     const s=Math.round(Math.min(100,b.softness+(pSo>0?pSo/100*room*(1-q):-pSo/100*room*q))/5)*5;
     return Ts[s]||(Ts[s]=tipData({...b,softness:s}));};
   function stamp(x,y,p,az,dir,step){
+    if(lpx!==null)sP+=Math.hypot(x-lpx,y-lpy);lpx=x;lpy=y;
     if(!started){ax=x;ay=y;started=true;}
     else{const lx=x-ax,ly=y-ay,ld=Math.hypot(lx,ly);if(ld>leash){const k=(ld-leash)/ld;ax+=lx*k;ay+=ly*k;sA+=ld-leash;}}
     sNow=sA*scale;
@@ -710,6 +717,7 @@ function stamper(buf,b,seed,scale){
     let lvl=1-b.pOpacity/100*(1-pc(p,b.cOpacity));const Tp=tOf(p),Dp=dtOf(p);
     if(b.opJitter)lvl*=1-b.opJitter/100*jrng();
     if(fadeOn)lvl*=Math.max(0,1-(b.fadeOpacity||0)/100*(1-fk()));
+    if(taperOn&&b.taperOpacity)lvl*=1-b.taperOpacity/100*(1-tk());
     if(capOn){buf.oj=lvl;lvl=1;}
     const ang=baseAng+(b.angleSrc==='direction'?dir:(b.angleSrc==='tilt'&&az!=null?az:0))+(rng()-.5)*2*Math.PI*b.angleJitter/100;
     if(b.offX||b.offY){let ox=b.offX/100*b.master,oy=b.offY/100*b.master;
@@ -753,9 +761,9 @@ function bufsFor(n){while(pool.length<n)pool.push(makeBuf(bufW,bufH));return poo
 // (by the tip's shape × the amount: brush opacity, and pressure if "pressure → opacity" is on),
 // then the patch takes up some of what it now sits on. "Smudge strength" = how much the patch keeps
 // from before, i.e. how far the paint is pulled along.
-function smudger(ctx,s,scale){
+function smudger(ctx,s,scale,total){
   const cv=ctx.canvas,W=cv.width,H=cv.height,img=ctx.getImageData(0,0,W,H),d=img.data;
-  const hb={...headBrush(s.b,0),cross:'off'},keep=Math.min(.995,(s.b.smudge??70)/100),op=s.b.opacity/100;
+  const hb={...headBrush(s.b,0),cross:'off',total},keep=Math.min(.995,(s.b.smudge??70)/100),op=s.b.opacity/100;
   const Rm=Math.ceil(hb.size*scale/2*1.05)+2,P=2*Rm+1,C=new Float32Array(P*P*4),L=-Math.log(1-.9975);let init=false;
   const buf={W,H,dabFn(T,cx,cy,r,ang,rd,amt,stp){
     // amounts are per brush-width of travel, so dense or sparse spacing smudges the same
@@ -786,12 +794,16 @@ function smudger(ctx,s,scale){
     if(x1>x0&&y1>y0)ctx.putImageData(img,0,0,x0,y0,x1-x0,y1-y0);};
   return st;
 }
+// length of the path the dabs follow (the same smoothed curve), for the end taper
+function pathLen(pts){let L=0,prev=pts[0];const f=feeder(pt=>{L+=Math.hypot(pt.x-prev.x,pt.y-prev.y);prev=pt;});pts.forEach(q=>f.push(q));f.end();return L;}
+const hasTaper=b=>b.heads.some(h=>h.taperStart>0||h.taperEnd>0);
 function renderStroke(target,s,scale,bufs){
-  if(s.smudge){const sm=smudger(target,s,scale);sm.first(s.pts[0]);let prev=s.pts[0];
+  const total=hasTaper(s.b)?pathLen(s.pts):undefined;
+  if(s.smudge){const sm=smudger(target,s,scale,total);sm.first(s.pts[0]);let prev=s.pts[0];
     const f=feeder(pt=>{sm.seg(prev,pt);prev=pt;});s.pts.forEach(q=>f.push(q));f.end();sm.finish();sm.put(sm.take());return;}
   const n=s.b.heads.length;bufs=bufs||bufsFor(n);let rect=null;
   for(let i=0;i<n;i++){
-    resetBuf(bufs[i]);const st=stamper(bufs[i],headBrush(s.b,i),s.seed+i*7919,scale);
+    resetBuf(bufs[i]);const st=stamper(bufs[i],{...headBrush(s.b,i),total},s.seed+i*7919,scale);
     st.first(s.pts[0]);let prev=s.pts[0];const f=feeder(pt=>{st.seg(prev,pt);prev=pt;});s.pts.forEach(q=>f.push(q));f.end();st.finish();rect=uni(rect,st.take());
   }
   composite(bufs.slice(0,n),rect,s,target,target);
@@ -927,6 +939,9 @@ function end(e){
   if(cur.b.smoothing>0&&lastRaw&&cur.pts.length>1){const q={...lastRaw,p:cur.pts[cur.pts.length-1].p};cur.pts.push(q);fd.push(q);}
   if(startPending)beginStroke(); // a tap with no movement: a dot at the touch-down pressure
   fd.end();st.forEach(t=>t.finish());liveUpdate();
+  if(hasTaper(cur.b)){ // now the length is known: draw it again with the end narrowing to a point
+    const c=active.ctx;c.save();c.setTransform(1,0,0,1,0,0);c.globalAlpha=1;c.globalCompositeOperation='copy';c.drawImage(snap,0,0);c.restore();
+    renderStroke(c,cur,dpr,cur.bufs);}
   active.strokes.push(cur);push({type:'stroke',layer:active,stroke:cur});updThumb(active);cur=null;st=null;fd=null;
 }
 stack.addEventListener('pointerup',end);stack.addEventListener('pointercancel',end);
@@ -1118,6 +1133,8 @@ const SPEC=[
   ['gh','אקראיות'],
   ['scatter','פיזור',0,200,'%','h'],['sizeJitter','שינוי גודל',0,100,'%','h'],['angleJitter','סיבוב',0,100,'%','h'],
   ['opJitter','רעד שקיפות',0,100,'%','h'],['flowJitter','רעד זרימה',0,100,'%','h'],
+  ['gh','התחדדות בהתחלה ובסוף'],
+  ['taperStart','חוד בהתחלה',0,600,'px','h'],['taperEnd','חוד בסוף',0,600,'px','h'],['taperMin','עובי בקצה',0,100,'%','h'],['taperOpacity','שקיפות בקצה',0,100,'%','h'],
   ['gh','דהייה לאורך הקו'],
   ['fadeLen','אורך הדהייה',0,1500,'px','h'],['fadeOpacity','דהייה ← שקיפות',0,100,'%','h'],['fadeSize','דהייה ← גודל',0,100,'%','h'],
   ['gh','עט ולחץ'],
@@ -1133,10 +1150,10 @@ const ctls=$('ctls'),inputs={},headSecs=[];
 let solo=null;
 const NO_SOLO=['size','smoothing','smudge','mode','strength','scale','offX','offY','offRel','colorMode'];
 const SOLO_GROUPS=[['pSize','minSize','cSize'],['pOpacity','cOpacity'],['pFlow','cFlow','flow'],['pSoft','cSoft','softness'],
-  ['fadeLen','fadeOpacity','fadeSize'],['roundness','angle','angleSrc'],['cross','gap','shadow'],['shape','tipId','tipData']];
+  ['fadeLen','fadeOpacity','fadeSize'],['taperStart','taperEnd','taperMin','taperOpacity'],['roundness','angle','angleSrc'],['cross','gap','shadow'],['shape','tipId','tipData']];
 const soloKeys=k=>{const g=SOLO_GROUPS.find(g=>g.includes(k));return g||[k];};
 const BRUSH_NEUTRAL={opacity:100,overlap:100,cross:'off'};
-const HEAD_NEUTRAL={shape:'round',flow:100,softness:0,spacing:4,roundness:100,angle:0,angleSrc:'fixed',grain:0,scatter:0,sizeJitter:0,angleJitter:0,
+const HEAD_NEUTRAL={taperStart:0,taperEnd:0,shape:'round',flow:100,softness:0,spacing:4,roundness:100,angle:0,angleSrc:'fixed',grain:0,scatter:0,sizeJitter:0,angleJitter:0,
   pSize:0,minSize:0,cSize:0,pOpacity:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0,opJitter:0,flowJitter:0,fadeLen:0,
   scale:100,offX:0,offY:0,mode:'add',strength:100,colorMode:'current'};
 function effB(){ // the brush actually used for drawing and the preview
@@ -1208,6 +1225,7 @@ function syncCtls(){
   inputs.minSize.row.hidden=inputs.cSize.row.hidden=!H.pSize;inputs.cOpacity.row.hidden=!H.pOpacity;
   inputs.cFlow.row.hidden=!H.pFlow;inputs.cSoft.row.hidden=!H.pSoft;drawPGraph();
   inputs.fadeOpacity.row.hidden=inputs.fadeSize.row.hidden=!H.fadeLen;
+  inputs.taperMin.row.hidden=inputs.taperOpacity.row.hidden=!(H.taperStart||H.taperEnd);
   {const ks=solo?soloKeys(solo):[];ctls.classList.toggle('soloing',!!solo);$('soloBar').hidden=!solo;
    if(solo)$('soloName').textContent=(specOf(solo)||[,solo])[1]+(B.heads.length>1?' (ראש '+(curHead+1)+')':'');
    for(const k in inputs){const r=inputs[k].row;r.classList.toggle('solon',ks.includes(k));const bt=r.querySelector('.solo');if(bt)bt.classList.toggle('on',k===solo);}}
@@ -1528,7 +1546,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-16h';
+const APP_BUILD='2026-10-16i';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1542,7 +1560,7 @@ function fmtVal(k,v){const e=specOf(k);if(!e)return String(v);
   if(Array.isArray(e[2])){const o=e[2].find(x=>x[0]===v);return o?o[1]:String(v);}
   return (typeof v==='number'?Math.round(v*10)/10:v)+(e[4]||'');}
 const labelOf=k=>{const e=specOf(k);return e?e[1]:k;};
-const HEAD_KEYS=['shape','flow','softness','spacing','roundness','angle','angleSrc','grain','scatter','sizeJitter','angleJitter','pSize','minSize','cSize','pOpacity','cOpacity','pFlow','cFlow','pSoft','cSoft','opJitter','flowJitter','fadeLen','fadeOpacity','fadeSize'];
+const HEAD_KEYS=['shape','flow','softness','spacing','roundness','angle','angleSrc','grain','scatter','sizeJitter','angleJitter','pSize','minSize','cSize','pOpacity','cOpacity','pFlow','cFlow','pSoft','cSoft','opJitter','flowJitter','fadeLen','fadeOpacity','fadeSize','taperStart','taperEnd','taperMin','taperOpacity'];
 const MULTI_KEYS=['mode','strength','scale','offX','offY','offRel','colorMode'];
 function strokeStats(s){let len=0,pmin=1,pmax=0;s.pts.forEach((p,i)=>{if(i)len+=Math.hypot(p.x-s.pts[i-1].x,p.y-s.pts[i-1].y);pmin=Math.min(pmin,p.p);pmax=Math.max(pmax,p.p);});
   return{n:s.pts.length,len:Math.round(len),pmin:Math.round(pmin*100),pmax:Math.round(pmax*100)};}
