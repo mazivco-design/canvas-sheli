@@ -107,7 +107,7 @@ input[type=range]{width:110px;accent-color:var(--accent)}
   background:repeating-conic-gradient(var(--check) 0 25%,var(--paper) 0 50%) 0 0/12px 12px}
 #prev{flex:1;min-width:0;width:100%}
 #tipView{width:96px;flex:none}
-.ctl{display:grid;grid-template-columns:96px minmax(0,1fr) 44px;align-items:center;gap:8px;font-size:13px}
+.ctl{display:grid;grid-template-columns:124px minmax(0,1fr) 44px;align-items:center;gap:8px;font-size:13px}
 .ctl input[type=range]{width:100%}
 .pgw{display:grid;gap:4px}.pgw canvas{width:100%;height:96px;display:block;direction:ltr}
 .pgl{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)}.pgl i{font-style:normal;display:flex;align-items:center;gap:4px}
@@ -115,7 +115,14 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 .ctl output{font-variant-numeric:tabular-nums;color:var(--muted);text-align:start;font-size:12px}
 .seg{display:flex;gap:4px;flex-wrap:wrap}
 .seg button{height:32px;min-width:0;padding:0 10px;border:1px solid var(--line);font-size:13px;border-radius:9px}
-.segrow{display:grid;grid-template-columns:96px minmax(0,1fr);align-items:center;gap:8px;font-size:13px}
+.solo{all:unset;box-sizing:border-box;width:22px;height:22px;flex:none;border-radius:50%;border:1.5px solid var(--line);display:inline-grid;place-items:center;cursor:pointer;margin-inline-end:6px;vertical-align:middle}
+.solo::after{content:'';width:8px;height:8px;border-radius:50%;background:transparent}
+.solo.on{border-color:#2f6fde}.solo.on::after{background:#2f6fde}
+.ctl>span,.segrow>span{display:flex;align-items:center;min-width:0}
+#ctls.soloing .ctl,#ctls.soloing .segrow{opacity:.35}#ctls.soloing .ctl.solon,#ctls.soloing .segrow.solon{opacity:1}
+#soloBar{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;background:color-mix(in srgb,#2f6fde 12%,transparent);font-size:13px}
+#soloBar b{font-weight:600}#soloBar button{margin-inline-start:auto}
+.segrow{display:grid;grid-template-columns:124px minmax(0,1fr);align-items:center;gap:8px;font-size:13px}
 #brushes footer{border-top:1px solid var(--line);padding:8px 12px;display:grid;gap:6px;flex:none}
 #brushes footer .row{display:flex;gap:6px}
 #brushes footer input{flex:1;min-width:0;font:inherit;font-size:14px;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:0 10px;height:38px;-webkit-user-select:text;user-select:text}
@@ -324,6 +331,7 @@ input[type=range]{width:110px;accent-color:var(--accent)}
         <canvas id="tipView" aria-label="ראש המברשת – נגיעה אחת"></canvas>
         <canvas id="prev" aria-label="תצוגה מקדימה של המברשת"></canvas>
       </div>
+      <div id="soloBar" hidden><span>בידוד: רק <b id="soloName"></b> פועל, כל השאר כבוי</span><button id="soloOff">סיים</button></div>
       <div id="ctls" style="display:grid;gap:8px"></div>
     </div>
     <footer>
@@ -845,8 +853,8 @@ stack.addEventListener('pointerdown',e=>{
   if(!active.visible){toast('השכבה מוסתרת – הפעל את העין כדי לצייר');return;}
   activeId=e.pointerId;try{stack.setPointerCapture(e.pointerId);}catch(_){}
   const p=raw(e);lastRaw=p;
-  cur={b:cloneB(B),color,erase:erasing,seed:(Math.random()*2**31)|0,pts:[p]};
-  {const src=allBrushes().find(x=>x.id===bid);cur.bname=(src?src.name:'מברשת')+(modified?' (שונתה)':'');}
+  cur={b:cloneB(effB()),color,erase:erasing,seed:(Math.random()*2**31)|0,pts:[p]};
+  {const src=allBrushes().find(x=>x.id===bid);cur.bname=(src?src.name:'מברשת')+(modified?' (שונתה)':'')+(solo?' · בידוד: '+labelOf(solo):'');}
   Object.defineProperty(cur,'ptype',{value:e.pointerType,enumerable:false});
   const bufs=bufsFor(cur.b.heads.length);bufs.forEach(resetBuf);
   snapX.setTransform(1,0,0,1,0,0);snapX.globalAlpha=1;snapX.globalCompositeOperation='copy';snapX.drawImage(active.canvas,0,0);snapX.globalCompositeOperation='source-over';
@@ -1080,6 +1088,27 @@ const SPEC=[
   ['pHint']
 ];
 const ctls=$('ctls'),inputs={},headSecs=[];
+// ---- Solo: draw with one parameter (and what belongs to it) while everything else is neutral ----
+let solo=null;
+const NO_SOLO=['size','smoothing','mode','strength','scale','offX','offY','offRel','colorMode'];
+const SOLO_GROUPS=[['pSize','minSize','cSize'],['pOpacity','cOpacity'],['pFlow','cFlow','flow'],['pSoft','cSoft','softness'],
+  ['fadeLen','fadeOpacity','fadeSize'],['roundness','angle','angleSrc'],['cross','gap','shadow'],['shape','tipId','tipData']];
+const soloKeys=k=>{const g=SOLO_GROUPS.find(g=>g.includes(k));return g||[k];};
+const BRUSH_NEUTRAL={opacity:100,overlap:100,cross:'off'};
+const HEAD_NEUTRAL={shape:'round',flow:100,softness:0,spacing:4,roundness:100,angle:0,angleSrc:'fixed',grain:0,scatter:0,sizeJitter:0,angleJitter:0,
+  pSize:0,minSize:0,cSize:0,pOpacity:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0,opJitter:0,flowJitter:0,fadeLen:0,
+  scale:100,offX:0,offY:0,mode:'add',strength:100,colorMode:'current'};
+function effB(){ // the brush actually used for drawing and the preview
+  if(!solo)return B;const ks=soloKeys(solo),h0=B.heads[curHead],b={...B,...BRUSH_NEUTRAL},h={...h0,...HEAD_NEUTRAL};
+  delete h.tipId;delete h.tipData;
+  ks.forEach(k=>{if(k in B&&BRUSH_KEYS.includes(k))b[k]=B[k];else if(h0[k]!==undefined)h[k]=h0[k];});
+  if(ks.includes('spacing')||ks.includes('shape'))h.spacing=h0.spacing;
+  b.heads=[h];return b;}
+function setSolo(k){solo=solo===k?null:k;syncCtls();clearTimeout(prevT);prevT=setTimeout(drawPreview,20);}
+function soloBtn(row,k){if(NO_SOLO.includes(k))return;const sp=row.querySelector('span'),bt=document.createElement('button');
+  bt.className='solo';bt.type='button';bt.setAttribute('aria-label','לצייר רק עם '+sp.textContent);bt.title='בידוד: לצייר רק עם הפרמטר הזה';
+  bt.onclick=e=>{e.preventDefault();e.stopPropagation();setSolo(k);};sp.prepend(bt);}
+$('soloOff').onclick=()=>setSolo(solo);
 const tgt=sc=>sc==='b'?B:B.heads[curHead];
 SPEC.forEach(([k,label,a,b2,unit,sc])=>{
   if(k==='g'){const d=document.createElement('div');d.className='sec';d.textContent=label;ctls.appendChild(d);return;}
@@ -1099,13 +1128,13 @@ SPEC.forEach(([k,label,a,b2,unit,sc])=>{
     const seg=document.createElement('div');seg.className='seg';
     a.forEach(([v,t])=>{const btn=document.createElement('button');btn.textContent=t;btn.dataset.v=v;
       btn.onclick=()=>{tgt(sc)[k]=v;changed();};seg.appendChild(btn);});
-    row.appendChild(seg);ctls.appendChild(row);inputs[k]={seg,row,sc};return;
+    row.appendChild(seg);ctls.appendChild(row);inputs[k]={seg,row,sc};soloBtn(row,k);return;
   }
   const row=document.createElement('label');row.className='ctl';
   row.innerHTML='<span>'+label+'</span><input type="range" id="b_'+k+'" min="'+a+'" max="'+b2+'"><output></output>';
   const inp=row.querySelector('input'),out=row.querySelector('output');
   inp.oninput=()=>{tgt(sc)[k]=+inp.value;out.textContent=inp.value+unit;changed(k);};
-  ctls.appendChild(row);inputs[k]={inp,out,unit,row,sc};
+  ctls.appendChild(row);inputs[k]={inp,out,unit,row,sc};soloBtn(row,k);
 });
 function renderHeads(){
   const box=$('headTabs');box.innerHTML='';
@@ -1138,6 +1167,9 @@ function syncCtls(){
   inputs.minSize.row.hidden=inputs.cSize.row.hidden=!H.pSize;inputs.cOpacity.row.hidden=!H.pOpacity;
   inputs.cFlow.row.hidden=!H.pFlow;inputs.cSoft.row.hidden=!H.pSoft;drawPGraph();
   inputs.fadeOpacity.row.hidden=inputs.fadeSize.row.hidden=!H.fadeLen;
+  {const ks=solo?soloKeys(solo):[];ctls.classList.toggle('soloing',!!solo);$('soloBar').hidden=!solo;
+   if(solo)$('soloName').textContent=(specOf(solo)||[,solo])[1]+(B.heads.length>1?' (ראש '+(curHead+1)+')':'');
+   for(const k in inputs){const r=inputs[k].row;r.classList.toggle('solon',ks.includes(k));const bt=r.querySelector('.solo');if(bt)bt.classList.toggle('on',k===solo);}}
   inputs.mode.row.hidden=curHead===0;$('modeHint').hidden=curHead===0;$('modeHint').textContent=MODE_HINT[H.mode]||'';
   const many=B.heads.length>1;
   headSecs.forEach(d=>d.textContent=(many?'ראש '+(curHead+1)+' · ':'')+d.dataset.label);
@@ -1155,7 +1187,7 @@ function syncCtls(){
 let prevT;
 function changed(k){modified=true;if(erasing&&!eraseLinked)persistEraser();syncCtls();clearTimeout(prevT);prevT=setTimeout(drawPreview,k==='size'?60:20);}
 function selectBrush(id){const src=allBrushes().find(x=>x.id===id);if(!src)return;
-  B=norm(src);bid=id;curHead=0;modified=false;syncCtls();drawPreview();renderLib();}
+  B=norm(src);bid=id;curHead=0;modified=false;solo=null;syncCtls();drawPreview();renderLib();}
 function demo(w,h,b,cap){
   const ext=Math.max(...b.heads.map(x=>x.scale/100+Math.abs(x.offY)/50)),sz=Math.min(b.size,cap/Math.max(1,ext)),pad=sz*Math.max(1,ext)/2+6,pts=[];
   for(let t=0;t<=1.0001;t+=.01)pts.push({x:pad+t*(w-2*pad),y:h/2+Math.sin(t*Math.PI*2)*h*.2,p:.15+.85*Math.sin(t*Math.PI),az:.8});
@@ -1183,7 +1215,7 @@ function drawPGraph(){
   const css=getComputedStyle(document.body),ink=css.color;x.clearRect(0,0,W,H);
   x.strokeStyle=ink;x.globalAlpha=.15;x.lineWidth=1;x.strokeRect(pad+.5,pad+.5,W-2*pad-1,H-2*pad-1);
   for(let i=1;i<4;i++){const gx=pad+(W-2*pad)*i/4;x.beginPath();x.moveTo(gx,pad);x.lineTo(gx,H-pad);x.stroke();}
-  x.globalAlpha=1;const h=B.heads[curHead];
+  x.globalAlpha=1;const h=solo?effB().heads[0]:B.heads[curHead];
   const pc=(p,c)=>c?Math.pow(p,Math.pow(2,-c/50)):p;
   const lines=[['#2f6fde',h.pSize,p=>Math.max(h.minSize/100,1-h.pSize/100*(1-pc(p,h.cSize)))],
     ['#e5484d',h.pOpacity,p=>1-h.pOpacity/100*(1-pc(p,h.cOpacity))],
@@ -1198,7 +1230,7 @@ function drawPGraph(){
   x.fillStyle=css.getPropertyValue('--muted')||ink;x.font='10px system-ui';x.textBaseline='bottom';
   x.textAlign='left';x.fillText('קל',pad+3,H-pad-2);x.textAlign='right';x.fillText('חזק',W-pad-3,H-pad-2);
 }
-function drawPreview(){if($('brushes').hidden)return;const col=erasing?inkCol():color;paintDemo($('prev'),B,col,64);drawTipView(col);}
+function drawPreview(){if($('brushes').hidden)return;const col=erasing?inkCol():color;paintDemo($('prev'),effB(),col,64);drawTipView(col);}
 function renderLib(){
   const lib=$('lib');lib.innerHTML='';const ink=inkCol();
   allBrushes().forEach(br=>{
@@ -1443,7 +1475,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-16f';
+const APP_BUILD='2026-10-16g';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
