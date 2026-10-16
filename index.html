@@ -437,10 +437,13 @@ function tipData(b){
   const T={N,a,F:Math.max(1e-3,F*2/N)}; // F = line integral across the tip, in units of the radius
   if(grayCache.size>60)grayCache.clear();grayCache.set(key,T);return T;
 }
-function makeBuf(w,h){return{W:w,H:h,f:new Float32Array(w*h),m:new Float32Array(w*h),used:null};}
-function sizeBuf(buf,w,h){buf.W=w;buf.H=h;buf.f=new Float32Array(w*h);buf.m=new Float32Array(w*h);buf.used=null;}
+// f: ink of the first pass · m: strongest single dab · f2: ink laid when the stroke comes back over itself
+// fs: how far along the stroke (px) each pixel was first painted (-1 = not yet)
+function makeBuf(w,h){const b={W:w,H:h,used:null};allocBuf(b);return b;}
+function allocBuf(b){const n=b.W*b.H;b.f=new Float32Array(n);b.m=new Float32Array(n);b.f2=new Float32Array(n);b.fs=new Float32Array(n).fill(-1);}
+function sizeBuf(buf,w,h){buf.W=w;buf.H=h;allocBuf(buf);buf.used=null;}
 function resetBuf(buf){ // wipe only what the previous stroke touched
-  const u=buf.used;if(u){for(let y=u.y0;y<u.y1;y++){buf.f.fill(0,y*buf.W+u.x0,y*buf.W+u.x1);buf.m.fill(0,y*buf.W+u.x0,y*buf.W+u.x1);}}
+  const u=buf.used;if(u){for(let y=u.y0;y<u.y1;y++){const a=y*buf.W+u.x0,z=y*buf.W+u.x1;buf.f.fill(0,a,z);buf.m.fill(0,a,z);buf.f2.fill(0,a,z);buf.fs.fill(-1,a,z);}}
   buf.used=null;
 }
 function grow(buf,x0,y0,x1,y1){const u=buf.used;buf.used=u?{x0:Math.min(u.x0,x0),y0:Math.min(u.y0,y0),x1:Math.max(u.x1,x1),y1:Math.max(u.y1,y1)}:{x0,y0,x1,y1};}
@@ -451,28 +454,33 @@ function rgb(col){if(rgbCache.has(col))return rgbCache.get(col);const x=rgbCv.ge
 // Overlap (0–100) decides what happens where the stroke crosses paint already on the layer:
 //   100 = normal glazing, each pass darkens;  0 = paint only tops up to the stroke's own opacity, never darker.
 const MODES={add:0,mask:1,sub:2,max:3};
+const comb=(a,b,m)=>m===0?a+b-a*b:m===1?a*b:m===2?a*(1-b):(a>b?a:b);
 function composite(bufs,r,s,target,base){
   if(!r)return;const buf=bufs[0],W=buf.W,H=buf.H,n=bufs.length;
   const x0=Math.max(0,Math.floor(r.x0)),y0=Math.max(0,Math.floor(r.y0)),x1=Math.min(W,Math.ceil(r.x1)),y1=Math.min(H,Math.ceil(r.y1));
   const w=x1-x0,h=y1-y0;if(w<=0||h<=0)return;
   const img=base.getImageData(x0,y0,w,h),d=img.data;
   const op=s.b.opacity/100,t=(s.b.overlap??100)/100,[R,G,Bc]=rgb(s.erase?'#000':s.color);
-  const Fs=bufs.map(b=>b.f),Ms=bufs.map(b=>b.m),str=s.b.heads.map(h=>h.strength/100),md=s.b.heads.map(h=>MODES[h.mode]||0);
+  const Fs=bufs.map(b=>b.f),Ms=bufs.map(b=>b.m),F2s=bufs.map(b=>b.f2),str=s.b.heads.map(h=>h.strength/100),md=s.b.heads.map(h=>MODES[h.mode]||0);
   const hc=s.b.heads.map(h=>!s.erase&&h.colorMode==='own'&&h.color?rgb(h.color):[R,G,Bc]);
   for(let yy=0;yy<h;yy++){const row=(y0+yy)*W+x0;
    for(let xx=0;xx<w;xx++){
-    const k=row+xx;let a=0,cr=R,cg=G,cb=Bc;
+    const k=row+xx;let a1=0,as=0,a2=0,rev=false,cr=R,cg=G,cb=Bc;
     for(let hh=0;hh<n;hh++){const c=hc[hh];
       // ink of this head: accumulated density, or its strongest single dab (keeps hard edges crisp); one full pass = 1
-      const g=Math.max(Fs[hh][k],Ms[hh][k]),ah=g>1e-4?Math.min(1,(1-Math.exp(-g))/.9975)*str[hh]:0;
-      if(hh===0){a=ah;cr=c[0];cg=c[1];cb=c[2];continue;}
-      switch(md[hh]){
-        case 0:{const na=a+ah-a*ah;if(na>0){const w1=ah/na,w0=1-w1;cr=c[0]*w1+cr*w0;cg=c[1]*w1+cg*w0;cb=c[2]*w1+cb*w0;}a=na;break;} // later head on top
-        case 1:a=a*ah;break;case 2:a=a*(1-ah);break;
-        default:if(ah>a){a=ah;cr=c[0];cg=c[1];cb=c[2];}}
+      const g1=Math.max(Fs[hh][k],Ms[hh][k]),g2=F2s[hh][k];
+      const c1=g1>1e-4?Math.min(1,(1-Math.exp(-g1))/.9975)*str[hh]:0;let cs=c1,c2=0;
+      if(g2>1e-4){rev=true;cs=Math.min(1,(1-Math.exp(-(g1+g2)))/.9975)*str[hh];c2=Math.min(1,(1-Math.exp(-g2))/.9975)*str[hh];}
+      if(hh===0){a1=c1;as=cs;a2=c2;cr=c[0];cg=c[1];cb=c[2];continue;}
+      const mo=md[hh];
+      if(mo===0){const na=as+cs-as*cs;if(na>0){const w1=cs/na,w0=1-w1;cr=c[0]*w1+cr*w0;cg=c[1]*w1+cg*w0;cb=c[2]*w1+cb*w0;}} // later head on top
+      else if(mo===3&&cs>as){cr=c[0];cg=c[1];cb=c[2];}
+      a1=comb(a1,c1,mo);as=comb(as,cs,mo);a2=comb(a2,c2,mo);
     }
-    if(a<=1e-4)continue;
-    const sa=op*a,i=(yy*w+xx)*4;
+    // where the stroke came back over itself: 0 = ink just merges (no darkening), 100 = the second pass glazes on top
+    let sa;if(!rev)sa=op*a1;else{const S=op*as,O=1-(1-op*a1)*(1-op*a2);sa=S+(O-S)*t;}
+    if(sa<=1e-4)continue;
+    const i=(yy*w+xx)*4;
     const da=d[i+3]/255;
     if(s.erase){d[i+3]=Math.round(da*(1-sa)*255);continue;}
     const e=da>=1?0:Math.max(0,(sa-da)/(1-da));      // just enough to reach max(da, sa)
@@ -484,8 +492,8 @@ function composite(bufs,r,s,target,base){
   bufs.forEach(b=>grow(b,x0,y0,x1,y1));
 }
 // Adds one dab's density to the buffer (software rasteriser: rotation, roundness, bilinear tip sampling).
-function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull){
-  const W=buf.W,H=buf.H,F=buf.f,M=buf.m,N=T.N,A=T.a,c=Math.cos(ang),si=Math.sin(ang),ir=1/r,ird=1/(r*rd),half=N/2;
+function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr){
+  const W=buf.W,H=buf.H,F=buf.f,M=buf.m,F2=buf.f2,FS=buf.fs,N=T.N,A=T.a,c=Math.cos(ang),si=Math.sin(ang),ir=1/r,ird=1/(r*rd),half=N/2;
   const x0=Math.max(0,Math.floor(cx-r)),x1=Math.min(W,Math.ceil(cx+r)+1),y0=Math.max(0,Math.floor(cy-r)),y1=Math.min(H,Math.ceil(cy+r)+1);
   if(x1<=x0||y1<=y0)return null;
   const ss=r<3?2:1,step=1/ss,off=step/2,wgt=D/(ss*ss),wf=Dfull/(ss*ss);
@@ -499,7 +507,9 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull){
       const a0=A[iy*N+ix],a1=A[iy*N+ix1],a2=A[iy1*N+ix],a3=A[iy1*N+ix1];
       acc+=(a0+(a1-a0)*fx)*(1-fy)+(a2+(a3-a2)*fx)*fy;
     }
-    if(acc>0){const k=py*W+px;F[k]+=acc*wgt;const v=acc*wf;if(v>M[k])M[k]=v;}
+    if(acc>0){const k=py*W+px;let fs=FS[k];if(fs<0){FS[k]=fs=sd;}
+      // painted long ago in this same stroke (further back than one brush width) → this is a second pass
+      if(sd-fs>thr)F2[k]+=acc*wgt;else{F[k]+=acc*wgt;const v=acc*wf;if(v>M[k])M[k]=v;}}
   }
   return{x0,y0,x1,y1};
 }
@@ -509,6 +519,8 @@ function stamper(buf,b,seed,scale){
   // the line's direction is averaged over a short distance, so tiny pen wobbles don't flip
   // direction-following tips and offsets (that flipping caused spikes in tight turns)
   let sdx=0,sdy=0;const dirLen=Math.max(6,b.size*.6);
+  // distance travelled along the stroke, in canvas pixels; a pixel revisited after more than this counts as a second pass
+  let sBase=0,sNow=0;const thr=(b.size*(1.15+2*b.scatter/100)+2)*scale;
   const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true;
   const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
   const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-p));
@@ -522,7 +534,7 @@ function stamper(buf,b,seed,scale){
     const r=Math.max(.6,sz/2*scale);
     // first dab is full strength (so a tap leaves a solid dot); later dabs share the density along the path
     const D=Dt*lvl*(first?1:Math.min(1,step*scale/(T.F*r)));first=false;
-    const box=rasterDab(buf,T,x*scale,y*scale,r,ang,rd,D,Dt*lvl);
+    const box=rasterDab(buf,T,x*scale,y*scale,r,ang,rd,D,Dt*lvl,sNow,thr);
     if(box)dirty=dirty?{x0:Math.min(dirty.x0,box.x0),y0:Math.min(dirty.y0,box.y0),x1:Math.max(dirty.x1,box.x1),y1:Math.max(dirty.y1,box.y1)}:box;
   }
   return{
@@ -532,15 +544,15 @@ function stamper(buf,b,seed,scale){
       const dx=q.x-a.x,dy=q.y-a.y,dist=Math.hypot(dx,dy);if(dist<.01)return;
       const k=sdx||sdy?Math.min(1,dist/dirLen):1;sdx=sdx*(1-k)+dx/dist*k;sdy=sdy*(1-k)+dy/dist*k;
       const dir=Math.atan2(sdy,sdx);let tt=0,carry=rem;
-      if(pending){stamp(pending.x,pending.y,pending.p,pending.az,dir,0);pending=null;}
+      if(pending){sNow=sBase;stamp(pending.x,pending.y,pending.p,pending.az,dir,0);pending=null;}
       while(true){
         const f0=tt/dist,p0=a.p+(q.p-a.p)*f0;
         const step=Math.max(.5,b.spacing/100*b.size*pf(p0)),need=step-carry;
         if(tt+need>dist){carry+=dist-tt;break;}
         tt+=need;carry=0;const f=tt/dist;
-        stamp(a.x+dx*f,a.y+dy*f,a.p+(q.p-a.p)*f,q.az,dir,step);
+        sNow=(sBase+tt)*scale;stamp(a.x+dx*f,a.y+dy*f,a.p+(q.p-a.p)*f,q.az,dir,step);
       }
-      rem=carry;
+      rem=carry;sBase+=dist;
     },
     finish(){if(pending){stamp(pending.x,pending.y,pending.p,pending.az,0,0);pending=null;}},
     take(){const d=dirty;dirty=null;return d;}
