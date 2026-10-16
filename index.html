@@ -70,6 +70,10 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 #layers{right:max(16px,env(safe-area-inset-right,0px));width:260px}
 #lyList{overflow-y:auto;padding:4px 8px;display:flex;flex-direction:column;gap:4px}
 .ly{display:flex;align-items:center;gap:8px;padding:6px;border-radius:12px;border:1px solid transparent;cursor:pointer}
+.bgrow{margin-top:4px;border-top:1px dashed var(--line);border-radius:0 0 12px 12px;padding-top:8px}
+.bgrow .bgsw{width:54px;height:40px;border-radius:6px;border:1px solid var(--line);flex:none;margin-inline-start:44px}
+.bgrow .bgname{flex:1;font-size:14px;padding:0 6px}
+.bgrow .bghint{font-size:12px;color:var(--muted);padding-inline-end:6px}
 .ly.sel{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .ly canvas{width:54px;height:40px;border-radius:6px;border:1px solid var(--line);flex:none;
   background:repeating-conic-gradient(var(--check) 0 25%,var(--paper) 0 50%) 0 0/10px 10px}
@@ -250,11 +254,11 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 
   <aside id="colors" class="panel" aria-label="צבעים" hidden>
     <header>
-      <span>צבע</span>
+      <span id="coTitle">צבע המברשת</span>
       <div class="grp"><button id="coClose" aria-label="סגור"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     </header>
     <div class="co">
-      <div class="seg" id="coTarget"><button data-t="brush" class="on">מברשת</button><button data-t="bg">רקע</button></div>
+
       <canvas id="svPad" aria-label="רוויה ובהירות"></canvas>
       <canvas id="huePad" aria-label="גוון"></canvas>
       <div class="co-row"><span class="co-cur" id="coCur"></span><input id="coHex" maxlength="7" aria-label="קוד צבע" dir="ltr"><button id="coBgReset" hidden>רקע רגיל</button></div>
@@ -890,6 +894,13 @@ function renderLayers(){
     row.onclick=ev=>{if(ev.target===name&&L===active)return;active=L;renderLayers();};
     list.appendChild(row);updThumb(L);
   });
+  // the background sits under every layer, like Photoshop's background layer: tap it to pick its colour
+  const bg=document.createElement('div');bg.className='ly bgrow'+(!$('colors').hidden&&coTarget==='bg'?' sel':'');
+  bg.setAttribute('role','button');bg.tabIndex=0;bg.setAttribute('aria-label','צבע הרקע');
+  bg.innerHTML='<span class="bgsw"></span><span class="bgname">רקע</span><span class="bghint">צבע</span>';
+  bg.querySelector('.bgsw').style.background=bgColor||'var(--paper)';
+  bg.onclick=()=>openColors('bg');bg.onkeydown=e=>{if(e.key==='Enter')openColors('bg');};
+  list.appendChild(bg);
   const i=idx(active);
   $('lyName').textContent=active.name;
   $('lyOp').value=Math.round(active.opacity*100);$('lyOpV').textContent=Math.round(active.opacity*100)+'%';
@@ -1239,7 +1250,7 @@ function drawPicker(){
 }
 function commit(final){
   const hex=hsv2hex(hsv);
-  if(coTarget==='bg'){bgColor=hex;applyBg();}
+  if(coTarget==='bg'){bgColor=hex;applyBg();const sw=document.querySelector('.bgrow .bgsw');if(sw)sw.style.background=hex;}
   else{color=hex;swBox.querySelectorAll('.sw').forEach(s=>s.classList.toggle('on',s.style.background&&rgb(s.style.background).join()===rgb(hex).join()));
     setErase(false);updDot();drawPreview();updColorBtn();
     if(final){recent=[hex].concat(recent.filter(c=>c!==hex)).slice(0,12);try{localStorage.setItem('pencil-recent',JSON.stringify(recent));}catch(e){}}}
@@ -1256,13 +1267,16 @@ dragPad($('svPad'),e=>{const r=$('svPad').getBoundingClientRect();hsv.s=clamp01(
 dragPad($('huePad'),e=>{const r=$('huePad').getBoundingClientRect();hsv.h=clamp01((e.clientX-r.left)/r.width)*359.9;});
 $('coHex').onchange=e=>{let v=e.target.value.trim();if(!v.startsWith('#'))v='#'+v;
   if(/^#[0-9a-f]{6}$/i.test(v)){hsv=hex2hsv(v);commit(true);}else{toast('כתוב צבע בצורה ‎#RRGGBB');drawPicker();}};
-$('coTarget').querySelectorAll('button').forEach(b=>b.onclick=()=>{coTarget=b.dataset.t;
-  $('coTarget').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));hsv=hex2hsv(curTargetColor());drawPicker();});
-$('coBgReset').onclick=()=>{bgColor=null;applyBg();hsv=hex2hsv(curTargetColor());drawPicker();};
+$('coBgReset').onclick=()=>{bgColor=null;applyBg();renderLayers();hsv=hex2hsv(curTargetColor());drawPicker();};
+// the palette button edits the brush colour; the background row in the layers panel edits the background
+function openColors(target){const p=$('colors'),same=!p.hidden&&coTarget===target;
+  coTarget=target;$('coTitle').textContent=target==='bg'?'צבע הרקע':'צבע המברשת';
+  setPanel(p,$('colorBtn'),!same);$('colorBtn').classList.toggle('on',!same&&target==='brush');
+  if(!same){hsv=hex2hsv(curTargetColor());requestAnimationFrame(drawPicker);}
+  renderLayers();}
 function updColorBtn(){$('colorBtn').querySelector('i').style.background=erasing?'transparent':color;}
-$('colorBtn').onclick=()=>{const p=$('colors'),open=p.hidden;setPanel(p,$('colorBtn'),open);
-  if(open){hsv=hex2hsv(curTargetColor());requestAnimationFrame(drawPicker);}};
-$('coClose').onclick=()=>setPanel($('colors'),$('colorBtn'),false);
+$('colorBtn').onclick=()=>openColors('brush');
+$('coClose').onclick=()=>{setPanel($('colors'),$('colorBtn'),false);renderLayers();};
 applyBg();updColorBtn();
 
 // =================== MOVABLE PANELS ===================
