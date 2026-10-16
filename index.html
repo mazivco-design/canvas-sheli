@@ -799,10 +799,15 @@ function allowed(e){
 // down; those zeros were averaged into the stroke, making hard strokes thin and lumpy. During a stroke a 0
 // is replaced by the main reading of that moment, or by the last good one.
 let lastPenRaw=.5;
-function penRaw(ev,main){let v=ev.pressure;if(!(v>0))v=main&&main.pressure>0?main.pressure:lastPenRaw;lastPenRaw=v;return v;}
-function raw(e,main){ // pen position in canvas pixels (undoing zoom, pan and rotation)
+// Pressure is taken from the main pen events only, eased across the in-between readings: on iPad the
+// in-between ("coalesced") readings can carry a much lower or zero pressure than the pen really has,
+// while the calibration pad (main events) reads the full range.
+function penRaw(ev,main,t){const m=main||ev;let v=m.pressure;if(!(v>0))v=lastPenRaw;
+  if(cur){const cv=ev.pressure;if(cv>(cur.rawCoal||0))cur.rawCoal=cv;}
+  const prev=cur&&cur.prevMain!=null?cur.prevMain:v,out=t==null?v:prev+(v-prev)*t;lastPenRaw=v;return out;}
+function raw(e,main,t){ // pen position in canvas pixels (undoing zoom, pan and rotation)
   const w=wrapG.getBoundingClientRect(),c=toCanvas({x:e.clientX-w.left,y:e.clientY-w.top});
-  const rp=e.pointerType==='pen'?penRaw(e,main):0;let p=e.pointerType==='pen'?mapPressure(rp):0.6, az=null;
+  const rp=e.pointerType==='pen'?penRaw(e,main,t):0;let p=e.pointerType==='pen'?mapPressure(rp):0.6, az=null;
   if(cur&&e.pointerType==='pen'&&rp>(cur.rawMax||0))cur.rawMax=rp;
   if(typeof e.azimuthAngle==='number'&&e.pointerType==='pen')az=e.azimuthAngle;
   else if(e.tiltX||e.tiltY)az=Math.atan2(e.tiltY,e.tiltX);
@@ -851,11 +856,13 @@ stack.addEventListener('pointermove',e=>{
   if(e.pointerId!==activeId||!cur)return;
   e.preventDefault();
   const evs=e.getCoalescedEvents?e.getCoalescedEvents():[];
-  for(const ev of(evs.length?evs:[e])){
-    const r=raw(ev,e);lastRaw=r;
-    if(startPending){cur.pts[0].p=r.p;beginStroke();continue;}
+  const list=evs.length?evs:[e];
+  list.forEach((ev,i)=>{
+    const r=raw(ev,e,(i+1)/list.length);lastRaw=r;
+    if(startPending){cur.pts[0].p=r.p;beginStroke();return;}
     const q=smooth(r);cur.pts.push(q);fd.push(q);
-  }
+  });
+  if(e.pointerType==='pen'&&e.pressure>0)cur.prevMain=e.pressure;
   liveUpdate();
 });
 function end(e){
@@ -1430,7 +1437,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-16d';
+const APP_BUILD='2026-10-16e';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1453,7 +1460,7 @@ function reportLines(sel){
   out.push(['h','המשיכה']);
   out.push(['מברשת',s.bname||'—']);out.push(['צבע',s.erase?'מחק':s.color]);
   out.push(['שכבה',L.name+(L.opacity<1?' · '+Math.round(L.opacity*100)+'%':'')]);out.push(['רקע',bgColor||'רגיל']);
-  out.push(['לחץ העט','מ-'+st.pmin+'% עד '+st.pmax+'%']);if(s.rawMax!=null)out.push(['לחץ גולמי מהעט','עד '+Math.round(s.rawMax*100)+'%']);
+  out.push(['לחץ העט','מ-'+st.pmin+'% עד '+st.pmax+'%']);if(s.rawMax!=null)out.push(['לחץ גולמי מהעט','עד '+Math.round(s.rawMax*100)+'%'+(s.rawCoal!=null?' · ביניים עד '+Math.round(s.rawCoal*100)+'%':'')]);
   out.push(['כיול','לחץ מלא ב-'+Math.round(penMax*100)+'% · תחושה '+(penCurve>10?'רכה':penCurve<-10?'קשה':'רגילה')]);out.push(['אורך',st.len+'px · '+st.n+' נקודות']);
   out.push(['h','המברשת כולה']);
   ['size','opacity','overlap','smoothing','cross'].forEach(k=>out.push([labelOf(k),fmtVal(k,b[k])]));
@@ -1466,7 +1473,7 @@ function reportLines(sel){
   return out;}
 function reportJson(sel){const s=sel.s,b=cloneB(s.b);b.heads.forEach(h=>{if(h.tipData)h.tipData='[ציור]';});
   return JSON.stringify({app:'מחברת עיפרון '+APP_BUILD,brush:s.bname||null,color:s.erase?'eraser':s.color,layer:{name:sel.L.name,opacity:sel.L.opacity},
-    background:bgColor||'default',stroke:{...strokeStats(s),rawMax:s.rawMax??null},pen:{fullPressureAt:penMax,feel:penCurve},settings:b},null,1);}
+    background:bgColor||'default',stroke:{...strokeStats(s),rawMax:s.rawMax??null,rawCoal:s.rawCoal??null},pen:{fullPressureAt:penMax,feel:penCurve},settings:b},null,1);}
 function strokeBox(s){let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;s.pts.forEach(p=>{x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);});
   const h0=s.b.heads[0],pk=Math.max(...s.pts.map(p=>p.p)),pf=Math.max(h0.minSize/100,1-h0.pSize/100*(1-pk));
   const m=s.b.size*Math.max(...s.b.heads.map(h=>h.scale/100*pf+Math.hypot(h.offX||0,h.offY||0)/100))/2+12;return{x0:x0-m,y0:y0-m,x1:x1+m,y1:y1+m};}
