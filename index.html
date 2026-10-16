@@ -782,6 +782,8 @@ function feeder(emit){const P=[];
   return{push(q){P.push(q);const n=P.length;if(n>=3)segment(P[n-4]||P[n-3],P[n-3],P[n-2],q);},
     end(){const n=P.length;if(n>=2)segment(P[n-3]||P[n-2],P[n-2],P[n-1],P[n-1]);}};
 }
+let startPending=false;
+function beginStroke(){startPending=false;const p=cur.pts[0];st.forEach(t=>t.first(p));fd.push(p);}
 function liveUpdate(){let r=null;st.forEach(t=>r=uni(r,t.take()));composite(cur.bufs,r,cur,active.ctx,snapX);}
 stack.addEventListener('pointerdown',e=>{
   if(picking){e.preventDefault();picking=false;const sel=pickAt(raw(e));if(sel)openShare(sel);else toast('לא נמצאה משיכה כאן');return;}
@@ -795,8 +797,11 @@ stack.addEventListener('pointerdown',e=>{
   Object.defineProperty(cur,'ptype',{value:e.pointerType,enumerable:false});
   const bufs=bufsFor(cur.b.heads.length);bufs.forEach(resetBuf);
   snapX.setTransform(1,0,0,1,0,0);snapX.globalAlpha=1;snapX.globalCompositeOperation='copy';snapX.drawImage(active.canvas,0,0);snapX.globalCompositeOperation='source-over';
-  st=cur.b.heads.map((h,i)=>stamper(bufs[i],headBrush(cur.b,i),cur.seed+i*7919,dpr));st.forEach(t=>t.first(p));
-  prevEmit=p;fd=feeder(pt=>{st.forEach(t=>t.seg(prevEmit,pt));prevEmit=pt;});fd.push(p);
+  st=cur.b.heads.map((h,i)=>stamper(bufs[i],headBrush(cur.b,i),cur.seed+i*7919,dpr));
+  prevEmit=p;fd=feeder(pt=>{st.forEach(t=>t.seg(prevEmit,pt));prevEmit=pt;});
+  // The pen's first pressure reading (at touch-down) is often higher than what follows, which left a round
+  // blob at the start of light strokes. With the pen, the first dab waits for the first real movement.
+  if(e.pointerType==='pen')startPending=true;else beginStroke();
   Object.defineProperty(cur,'bufs',{value:bufs,enumerable:false,writable:true});liveUpdate();
 });
 stack.addEventListener('pointermove',e=>{
@@ -805,7 +810,9 @@ stack.addEventListener('pointermove',e=>{
   e.preventDefault();
   const evs=e.getCoalescedEvents?e.getCoalescedEvents():[];
   for(const ev of(evs.length?evs:[e])){
-    const r=raw(ev);lastRaw=r;const q=smooth(r);cur.pts.push(q);fd.push(q);
+    const r=raw(ev);lastRaw=r;
+    if(startPending){cur.pts[0].p=r.p;beginStroke();continue;}
+    const q=smooth(r);cur.pts.push(q);fd.push(q);
   }
   liveUpdate();
 });
@@ -814,6 +821,7 @@ function end(e){
   if(!cur)return;
   // let the smoothed line catch up to where the pen lifted
   if(cur.b.smoothing>0&&lastRaw&&cur.pts.length>1){const q={...lastRaw,p:cur.pts[cur.pts.length-1].p};cur.pts.push(q);fd.push(q);}
+  if(startPending)beginStroke(); // a tap with no movement: a dot at the touch-down pressure
   fd.end();st.forEach(t=>t.finish());liveUpdate();
   active.strokes.push(cur);push({type:'stroke',layer:active,stroke:cur});updThumb(active);cur=null;st=null;fd=null;
 }
@@ -1377,7 +1385,8 @@ function reportJson(sel){const s=sel.s,b=cloneB(s.b);b.heads.forEach(h=>{if(h.ti
   return JSON.stringify({app:'מחברת עיפרון '+APP_BUILD,brush:s.bname||null,color:s.erase?'eraser':s.color,layer:{name:sel.L.name,opacity:sel.L.opacity},
     background:bgColor||'default',stroke:strokeStats(s),settings:b},null,1);}
 function strokeBox(s){let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;s.pts.forEach(p=>{x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);});
-  const m=s.b.size*Math.max(...s.b.heads.map(h=>h.scale/100+Math.hypot(h.offX||0,h.offY||0)/100))/2+12;return{x0:x0-m,y0:y0-m,x1:x1+m,y1:y1+m};}
+  const h0=s.b.heads[0],pk=Math.max(...s.pts.map(p=>p.p)),pf=Math.max(h0.minSize/100,1-h0.pSize/100*(1-pk));
+  const m=s.b.size*Math.max(...s.b.heads.map(h=>h.scale/100*pf+Math.hypot(h.offX||0,h.offY||0)/100))/2+12;return{x0:x0-m,y0:y0-m,x1:x1+m,y1:y1+m};}
 function buildReport(sel){
   const cw=stack.clientWidth,ch=stack.clientHeight,full=document.createElement('canvas');full.width=Math.round(cw*dpr);full.height=Math.round(ch*dpr);
   const f=full.getContext('2d');f.fillStyle=getComputedStyle(stack).backgroundColor;f.fillRect(0,0,full.width,full.height);
