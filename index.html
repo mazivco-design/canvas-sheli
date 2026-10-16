@@ -443,7 +443,7 @@ let color=COLORS[0], erasing=false, smudging=false, tool='draw', dpr=1;
 // =================== BRUSH ENGINE ===================
 const DEF={size:6,opacity:100,flow:100,softness:0,spacing:5,shape:'round',roundness:100,angle:0,angleSrc:'fixed',
   grain:0,overlap:100,cross:'off',gap:25,shadow:50,scatter:0,sizeJitter:0,angleJitter:0,pSize:70,pOpacity:0,minSize:10,smoothing:20,
-  cSize:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0,opJitter:0,flowJitter:0,fadeLen:0,fadeOpacity:100,fadeSize:0,smudge:70,taperStart:0,taperEnd:0,taperMin:0,taperOpacity:0};
+  cSize:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0,opJitter:0,flowJitter:0,fadeLen:0,fadeOpacity:100,fadeSize:0,smudge:70,taperStart:0,taperEnd:0,taperMin:0,taperOpacity:0,falloff:'smooth'};
 const PRESETS=[
   {id:'round',name:'עגול בסיסי',size:30,softness:0,spacing:4,pSize:0,pOpacity:0,minSize:100,smoothing:15},
   {id:'pencil',name:'עיפרון',size:4,opacity:90,flow:60,softness:30,spacing:10,shape:'chalk',grain:45,pSize:50,pOpacity:80,minSize:30,angleJitter:100,smoothing:15},
@@ -485,8 +485,8 @@ function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1
 const hash=(x,y)=>{const s=Math.sin(x*127.1+y*311.7)*43758.5453;return s-Math.floor(s);};
 
 const maskCache=new Map(), tipCache=new Map();
-function mask(shape,soft,grain){
-  const key=shape+'|'+soft+'|'+grain; if(maskCache.has(key))return maskCache.get(key);
+function mask(shape,soft,grain,fo='smooth'){
+  const key=shape+'|'+soft+'|'+grain+'|'+fo; if(maskCache.has(key))return maskCache.get(key);
   const N=256,c=document.createElement('canvas');c.width=c.height=N;const x=c.getContext('2d');const rng=mulberry(9001);
   if(shape==='spray'){
     x.fillStyle='#fff';
@@ -500,6 +500,10 @@ function mask(shape,soft,grain){
       const nx=(px+.5)/N*2-1,ny=(py+.5)/N*2-1;
       const dist=shape==='square'?Math.max(Math.abs(nx),Math.abs(ny)):Math.hypot(nx,ny);
       let a=Math.min(1,Math.max(0,(1-dist)/fw));
+      // shape of the fade, from the rim (0) to where the solid part starts (1):
+      // smooth = an S-curve like Photoshop's hardness (no visible ring where the fade begins),
+      // linear = straight ramp, gauss = concentrated toward the centre with a long faint tail (airbrush-like)
+      if(fo==='smooth')a=a*a*(3-2*a);else if(fo==='gauss'){const G=3,e=Math.exp(-G);a=(Math.exp(-G*(1-a)*(1-a))-e)/(1-e);}
       // feather = an even fade from transparent at the rim to solid toward the centre; the outer diameter never changes,
       // more softness only moves the start of the fade inward
       if(shape==='chalk'){if(hash(px/6|0,py/6|0)<Math.max(g,.5)*.7)a*=.06;}
@@ -521,16 +525,16 @@ function loadTip(id,data,cb){const im=new Image();im.onload=()=>{const c=documen
 // Visible alpha = opacity × (1 − e^(−density)): the core saturates at the stroke opacity, feathers blend.
 function tip(b,col){ // coloured tip, used for the single-dab view
   const custom=b.shape==='custom'&&tipMasks.has(b.tipId);
-  const key=(custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain)+'|'+col;if(tipCache.has(key))return tipCache.get(key);
-  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain),c=document.createElement('canvas');c.width=c.height=m.width;
+  const key=(custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain+'|'+(b.falloff||'smooth'))+'|'+col;if(tipCache.has(key))return tipCache.get(key);
+  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain,b.falloff||'smooth'),c=document.createElement('canvas');c.width=c.height=m.width;
   const x=c.getContext('2d');x.drawImage(m,0,0);x.globalCompositeOperation='source-in';x.fillStyle=col;x.fillRect(0,0,c.width,c.height);
   if(tipCache.size>80)tipCache.clear();tipCache.set(key,c);return c;
 }
 const grayCache=new Map(); // tip alpha arrays
 function tipData(b){
   const custom=b.shape==='custom'&&tipMasks.has(b.tipId);
-  const key=custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain;if(grayCache.has(key))return grayCache.get(key);
-  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain),N=m.width;
+  const key=custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain+'|'+(b.falloff||'smooth');if(grayCache.has(key))return grayCache.get(key);
+  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain,b.falloff||'smooth'),N=m.width;
   const d=m.getContext('2d',{willReadFrequently:true}).getImageData(0,0,N,N).data,a=new Float32Array(N*N);
   // store density, not alpha: a dab of density a' shows exactly the tip's own alpha (so the feather looks right)
   const L=-Math.log(1-.9975);for(let i=0;i<a.length;i++)a[i]=-Math.log(1-.9975*d[i*4+3]/255)/L;
@@ -681,7 +685,7 @@ function stamper(buf,b,seed,scale){
   const crng=mulberry(seed^0x5bd1e995),pickMode=()=>b.cross==='random'?(crng()<.5?1:2):b.cross==='under'?2:1;
   let inCross=false,lastCross=0,runStart=0,curMode=0,nextMode=pickMode();
   buf.thr=thr;buf.ramp=b.size*scale;buf.gpx=gapPx;buf.spx=shPx;if(crossOn)crossBufs(buf);
-  const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true;
+  const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true,nSt=0,firstShare=1,firstArgs=null;
   const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
   // each pressure link has its own curve: + reacts already to a light touch, − needs a firm press
   const pc=(p,c)=>c?Math.pow(Math.min(1,Math.max(0,p)),Math.pow(2,-c/50)):p;
@@ -708,7 +712,8 @@ function stamper(buf,b,seed,scale){
   const tOf=p=>{if(!pSo||custom)return T;const q=pc(p,b.cSoft),room=100-b.softness;
     const s=Math.round(Math.min(100,b.softness+(pSo>0?pSo/100*room*(1-q):-pSo/100*room*q))/5)*5;
     return Ts[s]||(Ts[s]=tipData({...b,softness:s}));};
-  function stamp(x,y,p,az,dir,step){
+  function stamp(x,y,p,az,dir,step,force){
+    if(first)firstArgs=[x,y,p,az,dir];
     if(lpx!==null)sP+=Math.hypot(x-lpx,y-lpy);lpx=x;lpy=y;
     if(!started){ax=x;ay=y;started=true;}
     else{const lx=x-ax,ly=y-ay,ld=Math.hypot(lx,ly);if(ld>leash){const k=(ld-leash)/ld;ax+=lx*k;ay+=ly*k;sA+=ld-leash;}}
@@ -725,7 +730,10 @@ function stamper(buf,b,seed,scale){
     if(b.scatter){const rr=b.scatter/100*b.size*rng(),th=rng()*2*Math.PI;x+=Math.cos(th)*rr;y+=Math.sin(th)*rr;}
     const r=Math.max(.6,sz/2*scale);
     // first dab is full strength (so a tap leaves a solid dot); later dabs share the density along the path
-    const D=Dp*lvl*(first?1:Math.min(1,step*scale/(Tp.F*r)));first=false;
+    // the first dab carries the same share as every other one, so a soft stroke's start cap matches its end;
+    // a tap (only that one dab) gets topped up to a full dot in finish()
+    const share=force!=null?force:Math.min(1,(first?Math.max(.5,b.spacing/100*sz):step)*scale/(Tp.F*r));if(first)firstShare=share;
+    const D=Dp*lvl*share;first=false;nSt++;
     const box=buf.dabFn?buf.dabFn(Tp,x*scale,y*scale,r,ang,rd,lvl,step*scale):rasterDab(buf,Tp,x*scale,y*scale,r,ang,rd,D,Dp*lvl,sNow,thr,crossOn?gw:null,inCross?curMode:nextMode,inCross?runStart:sNow);
     if(crossOn&&buf.again){if(!inCross){inCross=true;runStart=sNow;curMode=nextMode;nextMode=pickMode();}lastCross=sNow;}
     else if(inCross&&sNow-lastCross>thr)inCross=false; // the crossing is over once the brush has moved a brush-width past it
@@ -748,7 +756,8 @@ function stamper(buf,b,seed,scale){
       }
       rem=carry;
     },
-    finish(){if(pending){stamp(pending.x,pending.y,pending.p,pending.az,0,0);pending=null;}},
+    finish(){if(pending){stamp(pending.x,pending.y,pending.p,pending.az,0,0);pending=null;}
+      if(nSt===1&&firstArgs&&firstShare<1){const[x,y,p,az,dir]=firstArgs;stamp(x,y,p,az,dir,0,1-firstShare);}},
     take(){const d=dirty;dirty=null;return d;}
   };
 }
@@ -1124,7 +1133,8 @@ const SPEC=[
   ['colorMode','צבע הראש',[['current','הצבע הנוכחי'],['own','צבע משלו']],null,null,'h'],
   ['headColor'],
   ['gh','קצה'],
-  ['flow','זרימה',1,100,'%','h'],['softness','רכות',0,100,'%','h'],['spacing','מרווח',1,100,'%','h'],
+  ['flow','זרימה',1,100,'%','h'],['softness','רכות',0,100,'%','h'],
+  ['falloff','צורת הריכוך',[['smooth','מעוגל'],['linear','ישר'],['gauss','גאוסיאני']],null,null,'h'],['spacing','מרווח',1,100,'%','h'],
   ['gh','צורה'],
   ['shape','צורת קצה',[['round','עגול'],['square','מרובע'],['chalk','גיר'],['spray','ספריי'],['custom','ציור']],null,null,'h'],
   ['roundness','עגלגלות',5,100,'%','h'],['angle','זווית',0,180,'°','h'],
@@ -1149,7 +1159,7 @@ const ctls=$('ctls'),inputs={},headSecs=[];
 // ---- Solo: draw with one parameter (and what belongs to it) while everything else is neutral ----
 let solo=null;
 const NO_SOLO=['size','smoothing','smudge','mode','strength','scale','offX','offY','offRel','colorMode'];
-const SOLO_GROUPS=[['pSize','minSize','cSize'],['pOpacity','cOpacity'],['pFlow','cFlow','flow'],['pSoft','cSoft','softness'],
+const SOLO_GROUPS=[['pSize','minSize','cSize'],['pOpacity','cOpacity'],['pFlow','cFlow','flow'],['softness','falloff'],['pSoft','cSoft','softness','falloff'],
   ['fadeLen','fadeOpacity','fadeSize'],['taperStart','taperEnd','taperMin','taperOpacity'],['roundness','angle','angleSrc'],['cross','gap','shadow'],['shape','tipId','tipData']];
 const soloKeys=k=>{const g=SOLO_GROUPS.find(g=>g.includes(k));return g||[k];};
 const BRUSH_NEUTRAL={opacity:100,overlap:100,cross:'off'};
@@ -1225,6 +1235,7 @@ function syncCtls(){
   inputs.minSize.row.hidden=inputs.cSize.row.hidden=!H.pSize;inputs.cOpacity.row.hidden=!H.pOpacity;
   inputs.cFlow.row.hidden=!H.pFlow;inputs.cSoft.row.hidden=!H.pSoft;drawPGraph();
   inputs.fadeOpacity.row.hidden=inputs.fadeSize.row.hidden=!H.fadeLen;
+  inputs.falloff.row.hidden=!H.softness&&!H.pSoft;
   inputs.taperMin.row.hidden=inputs.taperOpacity.row.hidden=!(H.taperStart||H.taperEnd);
   {const ks=solo?soloKeys(solo):[];ctls.classList.toggle('soloing',!!solo);$('soloBar').hidden=!solo;
    if(solo)$('soloName').textContent=(specOf(solo)||[,solo])[1]+(B.heads.length>1?' (ראש '+(curHead+1)+')':'');
@@ -1546,7 +1557,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-16i';
+const APP_BUILD='2026-10-16j';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1560,7 +1571,7 @@ function fmtVal(k,v){const e=specOf(k);if(!e)return String(v);
   if(Array.isArray(e[2])){const o=e[2].find(x=>x[0]===v);return o?o[1]:String(v);}
   return (typeof v==='number'?Math.round(v*10)/10:v)+(e[4]||'');}
 const labelOf=k=>{const e=specOf(k);return e?e[1]:k;};
-const HEAD_KEYS=['shape','flow','softness','spacing','roundness','angle','angleSrc','grain','scatter','sizeJitter','angleJitter','pSize','minSize','cSize','pOpacity','cOpacity','pFlow','cFlow','pSoft','cSoft','opJitter','flowJitter','fadeLen','fadeOpacity','fadeSize','taperStart','taperEnd','taperMin','taperOpacity'];
+const HEAD_KEYS=['shape','flow','softness','falloff','spacing','roundness','angle','angleSrc','grain','scatter','sizeJitter','angleJitter','pSize','minSize','cSize','pOpacity','cOpacity','pFlow','cFlow','pSoft','cSoft','opJitter','flowJitter','fadeLen','fadeOpacity','fadeSize','taperStart','taperEnd','taperMin','taperOpacity'];
 const MULTI_KEYS=['mode','strength','scale','offX','offY','offRel','colorMode'];
 function strokeStats(s){let len=0,pmin=1,pmax=0;s.pts.forEach((p,i)=>{if(i)len+=Math.hypot(p.x-s.pts[i-1].x,p.y-s.pts[i-1].y);pmin=Math.min(pmin,p.p);pmax=Math.max(pmax,p.p);});
   return{n:s.pts.length,len:Math.round(len),pmin:Math.round(pmin*100),pmax:Math.round(pmax*100)};}
