@@ -502,15 +502,16 @@ function composite(bufs,r,s,target,base){
   // crossing effect: 1 = the pass that comes back goes over (a light gap opens in the older line around it),
   // 2 = it goes under (the gap opens in the new pass around the older line)
   // 3 = random: each crossing decided its own way (stored per pixel in hm)
-  const cross=!buf.hb?0:s.b.cross==='over'?1:s.b.cross==='under'?2:s.b.cross==='random'?3:0,HB=buf.hb,HS=buf.hs,HM=buf.hm,FS0=buf.fs,F0=buf.f,M0=buf.m,thr0=buf.thr||0;
+  const cross=!buf.hb?0:s.b.cross==='over'?1:s.b.cross==='under'?2:s.b.cross==='random'?3:0,HB=buf.hb,HS=buf.hs,HM=buf.hm,FS0=buf.fs,F0=buf.f,M0=buf.m,thr0=buf.thr||0,ramp0=buf.ramp||1;
+  const oldW=ds=>ds<=thr0?0:Math.min(1,(ds-thr0)/ramp0); // how clearly a pixel belongs to an earlier pass
   // gap: a clean cut in the lower line next to the upper one · shadow: the lower line darkens toward the upper one
   const gw=buf.gpx||0,sw=buf.spx||0,shStr=(s.b.shadow??0)/100,reach=gw+sw;
   // for "under": distance from a pixel of the new pass to the older line, searched on a grid nearest-first
   let offs=null;if(cross>=2&&reach>0){const st=Math.max(1,reach/10),R2=reach*reach;offs=[];
     for(let oy=-reach;oy<=reach;oy+=st)for(let ox=-reach;ox<=reach;ox+=st){const d2=ox*ox+oy*oy;if(d2<=R2)offs.push([Math.round(ox),Math.round(oy),Math.sqrt(d2)]);}
     offs.sort((a,b)=>a[2]-b[2]);}
-  const distOld=(px,py,fs)=>{for(const[ox,oy,dd]of offs){const qx=px+ox,qy=py+oy;if(qx<0||qy<0||qx>=W||qy>=H)continue;
-      const j=qy*W+qx,f=FS0[j];if(f<0||fs-f<=thr0)continue;const g=Math.max(F0[j],M0[j]);if(g>.7)return dd;}return 1e9;}; // g>.7 ≈ past the line's mid-edge
+  let dW=1;const distOld=(px,py,hs)=>{for(const[ox,oy,dd]of offs){const qx=px+ox,qy=py+oy;if(qx<0||qy<0||qx>=W||qy>=H)continue;
+      const j=qy*W+qx,f=FS0[j];if(f<0)continue;const w=oldW(hs-f);if(w<=.05)continue;const g=Math.max(F0[j],M0[j]);if(g>.7){dW=w;return dd;}}return 1e9;}; // g>.7 ≈ past the line's mid-edge
   // returns how much to cut (0..1) and darken (0..1) for a pixel this far from the upper line
   let cut=0,shade=0;const near=dd=>{cut=gw>0?Math.min(1,Math.max(0,gw-dd+.5)):0;
     shade=sw>0&&shStr>0&&dd<reach?shStr*Math.pow(Math.max(0,1-Math.max(0,dd-gw)/sw),1.5):0;};
@@ -530,9 +531,9 @@ function composite(bufs,r,s,target,base){
     }
     if(cross){const hs=HS[k],fs=FS0[k],cm=cross===3?HM[k]:cross;cut=0;shade=0;
       if(!cm){}
-      else if(cm===1){if(!rev&&hs>=0&&fs>=0&&hs-fs>thr0)near(HB[k]);}                 // older line, beside the pass on top
-      else if(rev){a2=0;as=a1;rev=false;}                                         // the pass going under is hidden by the older line
-      else if(offs&&hs>=0&&a1>0&&fs>=0&&hs-fs<=thr0)near(distOld(x0+xx,y0+yy,fs)); // new pass, just beside the older line
+      else if(cm===1){if(!rev&&hs>=0&&fs>=0&&hs-fs>thr0){near(HB[k]);const w=oldW(hs-fs);cut*=w;shade*=w;}}                 // older line, beside the pass on top
+      else if(rev){const w=hs>=0&&fs>=0?oldW(hs-fs):1;as+=(a1-as)*w;a2*=1-w;if(w>.999)rev=false;} // hidden under the older line, fading in                                         // the pass going under is hidden by the older line
+      else if(offs&&hs>=0&&a1>0&&fs>=0&&hs-fs<=thr0){near(distOld(x0+xx,y0+yy,hs));cut*=dW;shade*=dW;} // new pass, just beside the older line
       // ("older" = painted much earlier than this pixel, so the same arm painted a moment before doesn't count)
       if(cut)a1*=1-cut;
       if(shade){const kd=1-shade*.75;cr*=kd;cg*=kd;cb*=kd;}
@@ -552,7 +553,8 @@ function composite(bufs,r,s,target,base){
   bufs.forEach(b=>grow(b,x0,y0,x1,y1));
 }
 // Adds one dab's density to the buffer (software rasteriser: rotation, roundness, bilinear tip sampling).
-function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm){
+function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm,rs){
+  const ramp=buf.ramp||1;
   const W=buf.W,H=buf.H,F=buf.f,M=buf.m,F2=buf.f2,FS=buf.fs,N=T.N,A=T.a,c=Math.cos(ang),si=Math.sin(ang),ir=1/r,ird=1/(r*rd),half=N/2;
   const x0=Math.max(0,Math.floor(cx-r)),x1=Math.min(W,Math.ceil(cx+r)+1),y0=Math.max(0,Math.floor(cy-r)),y1=Math.min(H,Math.ceil(cy+r)+1);
   if(x1<=x0||y1<=y0)return null;
@@ -569,7 +571,10 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm){
     }
     if(acc>0){const k=py*W+px;let fs=FS[k];if(fs<0){FS[k]=fs=sd;}
       // painted long ago in this same stroke (further back than one brush width) → this is a second pass
-      if(sd-fs>thr){F2[k]+=acc*wgt;again=true;}else{F[k]+=acc*wgt;const v=acc*wf;if(v>M[k])M[k]=v;}}
+      const ds=sd-fs;
+      if(ds>thr){const wv=Math.min(1,(ds-thr)/ramp);F2[k]+=acc*wgt*wv;if(wv>.35)again=true;
+        if(wv<1){F[k]+=acc*wgt*(1-wv);const v=acc*wf*(1-wv);if(v>M[k])M[k]=v;}}
+      else{F[k]+=acc*wgt;const v=acc*wf;if(v>M[k])M[k]=v;}}
   }
   buf.again=again;
   if(gw==null||!again||!buf.hb)return{x0,y0,x1,y1};
@@ -578,7 +583,7 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm){
   const X0=Math.max(0,Math.floor(cx-Rr)),X1=Math.min(W,Math.ceil(cx+Rr)+1),Y0=Math.max(0,Math.floor(cy-Rr)),Y1=Math.min(H,Math.ceil(cy+Rr)+1);
   for(let py=Y0;py<Y1;py++)for(let px=X0;px<X1;px++){
     const dx=px+.5-cx,dy=py+.5-cy,u=(c*dx+si*dy)/rr,v=(-si*dx+c*dy)/(rr*rd),e=(Math.hypot(u,v)-1)*rr*(rd<1?rd:1);
-    if(e>=gw)continue;const k=py*W+px,dd=e<0?0:e;if(dd<HB[k])HB[k]=dd;if(sd>=HS[k]){HS[k]=sd;HM[k]=cm;}
+    if(e>=gw)continue;const k=py*W+px,dd=e<0?0:e;if(dd<HB[k])HB[k]=dd;if(rs>=HS[k]){HS[k]=rs;HM[k]=cm;}
   }
   return{x0:X0,y0:Y0,x1:X1,y1:Y1};
 }
@@ -596,8 +601,8 @@ function stamper(buf,b,seed,scale){
   const shPx=(b.shadow||0)>0?Math.max(2*scale,b.master*.45*scale):0,gw=gapPx+shPx; // the marked area reaches past the gap into the shadow
   // random: its own seeded sequence, so the brush's other randomness stays the same and undo redraws it exactly
   const crng=mulberry(seed^0x5bd1e995),pickMode=()=>b.cross==='random'?(crng()<.5?1:2):b.cross==='under'?2:1;
-  let inCross=false,lastCross=0,curMode=0,nextMode=pickMode();
-  buf.thr=thr;buf.gpx=gapPx;buf.spx=shPx;if(crossOn)crossBufs(buf);
+  let inCross=false,lastCross=0,runStart=0,curMode=0,nextMode=pickMode();
+  buf.thr=thr;buf.ramp=b.size*scale;buf.gpx=gapPx;buf.spx=shPx;if(crossOn)crossBufs(buf);
   const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true;
   const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
   const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-p));
@@ -614,8 +619,8 @@ function stamper(buf,b,seed,scale){
     const r=Math.max(.6,sz/2*scale);
     // first dab is full strength (so a tap leaves a solid dot); later dabs share the density along the path
     const D=Dt*lvl*(first?1:Math.min(1,step*scale/(T.F*r)));first=false;
-    const box=rasterDab(buf,T,x*scale,y*scale,r,ang,rd,D,Dt*lvl,sNow,thr,crossOn?gw:null,inCross?curMode:nextMode);
-    if(crossOn&&buf.again){if(!inCross){inCross=true;curMode=nextMode;nextMode=pickMode();}lastCross=sNow;}
+    const box=rasterDab(buf,T,x*scale,y*scale,r,ang,rd,D,Dt*lvl,sNow,thr,crossOn?gw:null,inCross?curMode:nextMode,inCross?runStart:sNow);
+    if(crossOn&&buf.again){if(!inCross){inCross=true;runStart=sNow;curMode=nextMode;nextMode=pickMode();}lastCross=sNow;}
     else if(inCross&&sNow-lastCross>thr)inCross=false; // the crossing is over once the brush has moved a brush-width past it
     if(box)dirty=dirty?{x0:Math.min(dirty.x0,box.x0),y0:Math.min(dirty.y0,box.y0),x1:Math.max(dirty.x1,box.x1),y1:Math.max(dirty.y1,box.y1)}:box;
   }
