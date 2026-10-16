@@ -190,6 +190,14 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 
 #toast{position:absolute;top:60px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);
   padding:8px 14px;border-radius:999px;font-size:14px;pointer-events:none;z-index:9}
+#shareBox{position:absolute;inset:0;background:rgb(0 0 0 / .55);display:grid;place-items:center;z-index:10;
+  padding:16px max(16px,env(safe-area-inset-right,0px)) 16px max(16px,env(safe-area-inset-left,0px))}
+#shareBox .card{background:var(--dock);border-radius:18px;padding:14px;max-width:min(980px,100%);max-height:100%;display:grid;gap:10px;text-align:center;overflow:auto}
+#shareBox img{border-radius:10px;border:1px solid var(--line);max-width:100%;max-height:62vh;margin:0 auto;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto}
+#shareBox p{margin:0;font-size:14px;color:var(--muted)}
+#shareBox .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+#shareBox .row button{border:1px solid var(--line);height:42px}
+#shareBox textarea{width:100%;height:140px;font:12px ui-monospace,monospace;direction:ltr;-webkit-user-select:text;user-select:text;background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:8px}
 #saveBox{position:absolute;inset:0;background:rgb(0 0 0 / .55);display:grid;place-items:center;z-index:10;
   padding:24px max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe-area-inset-left,0px))}
 #saveBox .card{background:var(--dock);border-radius:18px;padding:16px;max-width:min(720px,100%);display:grid;gap:12px;text-align:center}
@@ -207,6 +215,7 @@ input[type=range]{width:110px;accent-color:var(--accent)}
   <div class="top">
     <div class="side">
       <button class="pill on" id="lyToggle" aria-expanded="true">שכבות · <b id="lyName">שכבה 2</b></button>
+      <button class="pill" id="shareBtn" title="תמונה עם המשיכה וכל הפרמטרים שלה, לשליחה ל-Claude">שתף לבדיקה</button>
       <button class="pill" id="navToggle" aria-expanded="false" title="ניווט: זום וסיבוב">ניווט</button>
       <button class="pill" id="zoomPill" hidden title="חזרה לתצוגה רגילה">100%</button>
       <div class="pill" id="status">עט: <b id="penState">לא זוהה עדיין</b> · לחץ <b id="pr">–</b></div>
@@ -358,6 +367,19 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 
   <div id="toast" hidden></div>
 
+  <div id="shareBox" hidden>
+    <div class="card">
+      <img id="shareImg" alt="תמונה לשיתוף עם המשיכה והפרמטרים שלה">
+      <p>לחיצה ארוכה על התמונה ← העתק, ואז הדבק בשיחה עם Claude</p>
+      <div class="row">
+        <button id="shareSend" class="on" hidden>שתף…</button>
+        <button id="shareCopy">העתק פרמטרים</button>
+        <button id="sharePick">בחר משיכה אחרת</button>
+        <button id="shareClose">סגור</button>
+      </div>
+      <textarea id="shareText" hidden readonly aria-label="הפרמטרים כטקסט"></textarea>
+    </div>
+  </div>
   <div id="saveBox" hidden>
     <div class="card">
       <img id="saveImg" alt="הציור שלך">
@@ -733,12 +755,14 @@ function feeder(emit){const P=[];
 }
 function liveUpdate(){let r=null;st.forEach(t=>r=uni(r,t.take()));composite(cur.bufs,r,cur,active.ctx,snapX);}
 stack.addEventListener('pointerdown',e=>{
+  if(picking){e.preventDefault();picking=false;const sel=pickAt(raw(e));if(sel)openShare(sel);else toast('לא נמצאה משיכה כאן');return;}
   if(!allowed(e)||activeId!==null||gest)return;
   e.preventDefault();
   if(!active.visible){toast('השכבה מוסתרת – הפעל את העין כדי לצייר');return;}
   activeId=e.pointerId;try{stack.setPointerCapture(e.pointerId);}catch(_){}
   const p=raw(e);lastRaw=p;
   cur={b:cloneB(B),color,erase:erasing,seed:(Math.random()*2**31)|0,pts:[p]};
+  {const src=allBrushes().find(x=>x.id===bid);cur.bname=(src?src.name:'מברשת')+(modified?' (שונתה)':'');}
   Object.defineProperty(cur,'ptype',{value:e.pointerType,enumerable:false});
   const bufs=bufsFor(cur.b.heads.length);bufs.forEach(resetBuf);
   snapX.setTransform(1,0,0,1,0,0);snapX.globalAlpha=1;snapX.globalCompositeOperation='copy';snapX.drawImage(active.canvas,0,0);snapX.globalCompositeOperation='source-over';
@@ -1283,6 +1307,94 @@ function updColorBtn(){$('colorBtn').querySelector('i').style.background=erasing
 $('colorBtn').onclick=()=>openColors('brush');
 $('coClose').onclick=()=>{setPanel($('colors'),$('colorBtn'),false);renderLayers();};
 applyBg();updColorBtn();
+
+// =================== SHARE FOR REVIEW ===================
+// One image with the drawing, a close-up of one stroke and every setting it was drawn with,
+// so it can be sent to Claude as is. The settings can also be copied as text.
+const APP_BUILD='2026-10-16';
+let picking=false,shareSel=null,shareJson='',shareBlob=null;
+function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
+  for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
+function pickAt(c){let best=null,bd=1e9;
+  for(let li=layers.length-1;li>=0;li--){const L=layers[li];if(!L.visible)continue;
+    for(let si=L.strokes.length-1;si>=0;si--){const s=L.strokes[si],tol=s.b.size/2+14;
+      for(const p of s.pts){const d=Math.hypot(p.x-c.x,p.y-c.y);if(d<tol&&d<bd){bd=d;best={L,s};}}}}
+  return best;}
+const specOf=k=>SPEC.find(e=>e[0]===k);
+function fmtVal(k,v){const e=specOf(k);if(!e)return String(v);
+  if(Array.isArray(e[2])){const o=e[2].find(x=>x[0]===v);return o?o[1]:String(v);}
+  return (typeof v==='number'?Math.round(v*10)/10:v)+(e[4]||'');}
+const labelOf=k=>{const e=specOf(k);return e?e[1]:k;};
+const HEAD_KEYS=['shape','flow','softness','spacing','roundness','angle','angleSrc','grain','scatter','sizeJitter','angleJitter','pSize','pOpacity','minSize'];
+const MULTI_KEYS=['mode','strength','scale','offX','offY','offRel','colorMode'];
+function strokeStats(s){let len=0,pmin=1,pmax=0;s.pts.forEach((p,i)=>{if(i)len+=Math.hypot(p.x-s.pts[i-1].x,p.y-s.pts[i-1].y);pmin=Math.min(pmin,p.p);pmax=Math.max(pmax,p.p);});
+  return{n:s.pts.length,len:Math.round(len),pmin:Math.round(pmin*100),pmax:Math.round(pmax*100)};}
+function reportLines(sel){
+  const s=sel.s,b=s.b,L=sel.L,st=strokeStats(s),out=[];
+  out.push(['h','המשיכה']);
+  out.push(['מברשת',s.bname||'—']);out.push(['צבע',s.erase?'מחק':s.color]);
+  out.push(['שכבה',L.name+(L.opacity<1?' · '+Math.round(L.opacity*100)+'%':'')]);out.push(['רקע',bgColor||'רגיל']);
+  out.push(['לחץ העט','מ-'+st.pmin+'% עד '+st.pmax+'%']);out.push(['אורך',st.len+'px · '+st.n+' נקודות']);
+  out.push(['h','המברשת כולה']);
+  ['size','opacity','overlap','smoothing','cross'].forEach(k=>out.push([labelOf(k),fmtVal(k,b[k])]));
+  if(b.cross&&b.cross!=='off'){out.push([labelOf('gap'),fmtVal('gap',b.gap)]);out.push([labelOf('shadow'),fmtVal('shadow',b.shadow??0)]);}
+  b.heads.forEach((h,i)=>{
+    out.push(['h',b.heads.length>1?'ראש '+(i+1):'הראש']);
+    if(b.heads.length>1)MULTI_KEYS.forEach(k=>{if(k==='mode'&&i===0)return;out.push([labelOf(k),fmtVal(k,h[k])+(k==='colorMode'&&h.colorMode==='own'?' '+h.color:'')]);});
+    HEAD_KEYS.forEach(k=>out.push([labelOf(k),fmtVal(k,h[k])]));
+  });
+  return out;}
+function reportJson(sel){const s=sel.s,b=cloneB(s.b);b.heads.forEach(h=>{if(h.tipData)h.tipData='[ציור]';});
+  return JSON.stringify({app:'מחברת עיפרון '+APP_BUILD,brush:s.bname||null,color:s.erase?'eraser':s.color,layer:{name:sel.L.name,opacity:sel.L.opacity},
+    background:bgColor||'default',stroke:strokeStats(s),settings:b},null,1);}
+function strokeBox(s){let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;s.pts.forEach(p=>{x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);});
+  const m=s.b.size*Math.max(...s.b.heads.map(h=>h.scale/100+Math.hypot(h.offX||0,h.offY||0)/100))/2+12;return{x0:x0-m,y0:y0-m,x1:x1+m,y1:y1+m};}
+function buildReport(sel){
+  const cw=stack.clientWidth,ch=stack.clientHeight,full=document.createElement('canvas');full.width=Math.round(cw*dpr);full.height=Math.round(ch*dpr);
+  const f=full.getContext('2d');f.fillStyle=getComputedStyle(stack).backgroundColor;f.fillRect(0,0,full.width,full.height);
+  layers.forEach(L=>{if(L.visible){f.globalAlpha=L.opacity;f.drawImage(L.canvas,0,0);}});f.globalAlpha=1;
+  const lines=reportLines(sel),PW=720,LH=30,FS=21,colN=2,colW=(PW-60)/colN;
+  // close-up of the stroke
+  const bx=strokeBox(sel.s),bw=bx.x1-bx.x0,bh=bx.y1-bx.y0,cropW=PW-40,cropH=Math.min(520,cropW*bh/bw);
+  const kC=Math.min(cropW/bw,cropH/bh);
+  // text height: header rows take a full row, the rest go two per row
+  let rows=0,col=0;lines.forEach(l=>{if(l[0]==='h'){rows+=(col?1:0)+1.4;col=0;}else{col++;if(col===colN){rows++;col=0;}}});if(col)rows++;
+  const PH=40+bh*kC+30+rows*LH+60,LW=1180,kL=Math.min(LW/cw,1400/ch),LH2=ch*kL,H=Math.max(PH,LH2+80),W=LW+PW+60;
+  const out=document.createElement('canvas');out.width=W;out.height=Math.ceil(H);const o=out.getContext('2d');
+  o.fillStyle='#f4f3ef';o.fillRect(0,0,W,out.height);
+  // left: the whole drawing, the chosen stroke framed
+  const lx=20,ly=50;o.fillStyle='#1f2328';o.font='600 22px system-ui,-apple-system,sans-serif';o.direction='rtl';o.textAlign='right';
+  o.fillText('הציור – המשיכה מסומנת',lx+LW,34);
+  o.drawImage(full,lx,ly,cw*kL,ch*kL);o.strokeStyle='#d8d6cf';o.lineWidth=1;o.strokeRect(lx,ly,cw*kL,ch*kL);
+  o.setLineDash([10,6]);o.strokeStyle='#2f6fde';o.lineWidth=3;o.strokeRect(lx+bx.x0*kL,ly+bx.y0*kL,bw*kL,bh*kL);o.setLineDash([]);
+  // right: close-up + settings
+  const px=LW+40;o.fillStyle='#ffffff';o.fillRect(px,20,PW,out.height-40);o.strokeStyle='#d8d6cf';o.strokeRect(px,20,PW,out.height-40);
+  o.drawImage(full,bx.x0*dpr,bx.y0*dpr,bw*dpr,bh*dpr,px+20+(cropW-bw*kC)/2,40,bw*kC,bh*kC);
+  let y=40+bh*kC+40;col=0;
+  lines.forEach(l=>{
+    if(l[0]==='h'){if(col){y+=LH;col=0;}y+=LH*.4;o.fillStyle='#2f6fde';o.font='700 '+(FS+1)+'px system-ui,-apple-system,sans-serif';o.fillText(l[1],px+PW-20,y);
+      o.fillStyle='#e3e1d9';o.fillRect(px+20,y+8,PW-40,1);y+=LH;return;}
+    const xr=px+PW-20-col*colW;o.font='500 '+FS+'px system-ui,-apple-system,sans-serif';o.fillStyle='#6b6f76';o.fillText(l[0]+':',xr,y);
+    const lw=o.measureText(l[0]+': ').width;o.fillStyle='#1f2328';o.font='600 '+FS+'px system-ui,-apple-system,sans-serif';o.fillText(String(l[1]),xr-lw,y);
+    col++;if(col===colN){col=0;y+=LH;}
+  });
+  o.fillStyle='#9a9ca3';o.font='400 16px system-ui,-apple-system,sans-serif';o.fillText('מחברת עיפרון · '+APP_BUILD,px+PW-20,out.height-34);
+  return out;}
+function openShare(sel){
+  if(!sel){toast('עוד אין משיכות לשתף');return;}
+  shareSel=sel;const cv=buildReport(sel);shareJson=reportJson(sel);
+  $('shareImg').src=cv.toDataURL('image/png');$('shareBox').hidden=false;shareBlob=null;
+  cv.toBlob(bl=>{shareBlob=bl;const f=bl&&new File([bl],'brush-report.png',{type:'image/png'});
+    $('shareSend').hidden=!(f&&navigator.canShare&&navigator.canShare({files:[f]}));},'image/png');
+}
+$('shareBtn').onclick=()=>openShare(lastStroke());
+$('sharePick').onclick=()=>{$('shareBox').hidden=true;picking=true;toast('גע במשיכה שתרצה לשתף');};
+$('shareClose').onclick=()=>{$('shareBox').hidden=true;};
+$('shareSend').onclick=async()=>{try{const f=new File([shareBlob],'brush-report.png',{type:'image/png'});
+  await navigator.share({files:[f],text:'פרמטרים של משיכה ממחברת עיפרון:\n'+shareJson});}catch(e){if(e&&e.name!=='AbortError')toast('לא הצלחתי לפתוח שיתוף – לחיצה ארוכה על התמונה');}};
+$('shareCopy').onclick=()=>{const ok=()=>toast('הפרמטרים הועתקו – הדבק בשיחה');
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(shareJson).then(ok,()=>fallbackCopy());else fallbackCopy();
+  function fallbackCopy(){const ta=$('shareText');ta.hidden=false;ta.value=shareJson;ta.focus();ta.select();try{document.execCommand('copy');ok();}catch(_){toast('סמן את הטקסט והעתק');}}};
 
 // =================== MOVABLE PANELS ===================
 // Drag a panel by its header (the toolbar by its grip). Drop it near a screen edge and it sticks to that edge.
