@@ -106,6 +106,9 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 #tipView{width:96px;flex:none}
 .ctl{display:grid;grid-template-columns:96px minmax(0,1fr) 44px;align-items:center;gap:8px;font-size:13px}
 .ctl input[type=range]{width:100%}
+.pgw{display:grid;gap:4px}.pgw canvas{width:100%;height:96px;display:block;direction:ltr}
+.pgl{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)}.pgl i{font-style:normal;display:flex;align-items:center;gap:4px}
+.pgl i::before{content:'';width:12px;height:3px;border-radius:2px;background:var(--c)}
 .ctl output{font-variant-numeric:tabular-nums;color:var(--muted);text-align:start;font-size:12px}
 .seg{display:flex;gap:4px;flex-wrap:wrap}
 .seg button{height:32px;min-width:0;padding:0 10px;border:1px solid var(--line);font-size:13px;border-radius:9px}
@@ -427,7 +430,8 @@ let color=COLORS[0], erasing=false, dpr=1;
 
 // =================== BRUSH ENGINE ===================
 const DEF={size:6,opacity:100,flow:100,softness:0,spacing:5,shape:'round',roundness:100,angle:0,angleSrc:'fixed',
-  grain:0,overlap:100,cross:'off',gap:25,shadow:50,scatter:0,sizeJitter:0,angleJitter:0,pSize:70,pOpacity:0,minSize:10,smoothing:20};
+  grain:0,overlap:100,cross:'off',gap:25,shadow:50,scatter:0,sizeJitter:0,angleJitter:0,pSize:70,pOpacity:0,minSize:10,smoothing:20,
+  cSize:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0};
 const PRESETS=[
   {id:'round',name:'עגול בסיסי',size:30,softness:0,spacing:4,pSize:0,pOpacity:0,minSize:100,smoothing:15},
   {id:'pencil',name:'עיפרון',size:4,opacity:90,flow:60,softness:30,spacing:10,shape:'chalk',grain:45,pSize:50,pOpacity:80,minSize:30,angleJitter:100,smoothing:15},
@@ -656,21 +660,29 @@ function stamper(buf,b,seed,scale){
   buf.thr=thr;buf.ramp=b.size*scale;buf.gpx=gapPx;buf.spx=shPx;if(crossOn)crossBufs(buf);
   const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true;
   const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
-  const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-p));
+  // each pressure link has its own curve: + reacts already to a light touch, − needs a firm press
+  const pc=(p,c)=>c?Math.pow(Math.min(1,Math.max(0,p)),Math.pow(2,-c/50)):p;
+  const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-pc(p,b.cSize)));
+  const pFl=b.pFlow||0,pSo=b.pSoft||0,custom=b.shape==='custom'&&tipMasks.has(b.tipId),Ts=[];
+  const dtOf=p=>{if(!pFl)return Dt;const fl=b.flow/100*(1-pFl/100*(1-pc(p,b.cFlow)));return -Math.log(1-Math.min(.9975,Math.max(.005,fl)));};
+  // softness by pressure: + a light touch is softer, − a firm press is softer (in steps of 5, each tip made once)
+  const tOf=p=>{if(!pSo||custom)return T;const q=pc(p,b.cSoft),room=100-b.softness;
+    const s=Math.round(Math.min(100,b.softness+(pSo>0?pSo/100*room*(1-q):-pSo/100*room*q))/5)*5;
+    return Ts[s]||(Ts[s]=tipData({...b,softness:s}));};
   function stamp(x,y,p,az,dir,step){
     if(!started){ax=x;ay=y;started=true;}
     else{const lx=x-ax,ly=y-ay,ld=Math.hypot(lx,ly);if(ld>leash){const k=(ld-leash)/ld;ax+=lx*k;ay+=ly*k;sA+=ld-leash;}}
     sNow=sA*scale;
     const sz=b.size*pf(p)*(1-b.sizeJitter/100*rng());
-    const lvl=1-b.pOpacity/100*(1-p);
+    const lvl=1-b.pOpacity/100*(1-pc(p,b.cOpacity)),Tp=tOf(p),Dp=dtOf(p);
     const ang=baseAng+(b.angleSrc==='direction'?dir:(b.angleSrc==='tilt'&&az!=null?az:0))+(rng()-.5)*2*Math.PI*b.angleJitter/100;
     if(b.offX||b.offY){let ox=b.offX/100*b.master,oy=b.offY/100*b.master;
       if(b.offRel==='direction'){const c=Math.cos(dir),sn=Math.sin(dir);[ox,oy]=[ox*c-oy*sn,ox*sn+oy*c];}x+=ox;y+=oy;}
     if(b.scatter){const rr=b.scatter/100*b.size*rng(),th=rng()*2*Math.PI;x+=Math.cos(th)*rr;y+=Math.sin(th)*rr;}
     const r=Math.max(.6,sz/2*scale);
     // first dab is full strength (so a tap leaves a solid dot); later dabs share the density along the path
-    const D=Dt*lvl*(first?1:Math.min(1,step*scale/(T.F*r)));first=false;
-    const box=rasterDab(buf,T,x*scale,y*scale,r,ang,rd,D,Dt*lvl,sNow,thr,crossOn?gw:null,inCross?curMode:nextMode,inCross?runStart:sNow);
+    const D=Dp*lvl*(first?1:Math.min(1,step*scale/(Tp.F*r)));first=false;
+    const box=rasterDab(buf,Tp,x*scale,y*scale,r,ang,rd,D,Dp*lvl,sNow,thr,crossOn?gw:null,inCross?curMode:nextMode,inCross?runStart:sNow);
     if(crossOn&&buf.again){if(!inCross){inCross=true;runStart=sNow;curMode=nextMode;nextMode=pickMode();}lastCross=sNow;}
     else if(inCross&&sNow-lastCross>thr)inCross=false; // the crossing is over once the brush has moved a brush-width past it
     if(box)dirty=dirty?{x0:Math.min(dirty.x0,box.x0),y0:Math.min(dirty.y0,box.y0),x1:Math.max(dirty.x1,box.x1),y1:Math.max(dirty.y1,box.y1)}:box;
@@ -1020,7 +1032,12 @@ const SPEC=[
   ['gh','אקראיות'],
   ['scatter','פיזור',0,200,'%','h'],['sizeJitter','שינוי גודל',0,100,'%','h'],['angleJitter','סיבוב',0,100,'%','h'],
   ['gh','עט ולחץ'],
-  ['pSize','לחץ ← גודל',0,100,'%','h'],['pOpacity','לחץ ← שקיפות',0,100,'%','h'],['minSize','גודל מינימלי',0,100,'%','h']
+  ['pgraph'],
+  ['pSize','לחץ ← גודל',0,100,'%','h'],['minSize','גודל מינימלי',0,100,'%','h'],['cSize','עקומת גודל',-100,100,'','h'],
+  ['pOpacity','לחץ ← שקיפות',0,100,'%','h'],['cOpacity','עקומת שקיפות',-100,100,'','h'],
+  ['pFlow','לחץ ← זרימה',0,100,'%','h'],['cFlow','עקומת זרימה',-100,100,'','h'],
+  ['pSoft','לחץ ← רכות',-100,100,'%','h'],['cSoft','עקומת רכות',-100,100,'','h'],
+  ['pHint']
 ];
 const ctls=$('ctls'),inputs={},headSecs=[];
 const tgt=sc=>sc==='b'?B:B.heads[curHead];
@@ -1031,6 +1048,11 @@ SPEC.forEach(([k,label,a,b2,unit,sc])=>{
   if(k==='headColor'){const row=document.createElement('label');row.className='segrow';row.id='headColorRow';
     row.innerHTML='<span>הצבע שלו</span><input type="color" id="headColor" aria-label="צבע הראש">';ctls.appendChild(row);
     row.querySelector('input').oninput=e=>{B.heads[curHead].color=e.target.value;changed();};return;}
+  if(k==='pgraph'){const w=document.createElement('div');w.className='pgw';
+    w.innerHTML='<canvas id="pGraph" aria-label="גרף התגובה ללחץ"></canvas><div class="pgl"><i style="--c:#2f6fde">גודל</i><i style="--c:#e5484d">שקיפות</i><i style="--c:#30a46c">זרימה</i><i style="--c:#a855f7">רכות</i></div>';
+    ctls.appendChild(w);return;}
+  if(k==='pHint'){const p=document.createElement('p');p.className='hint2';
+    p.textContent='עקומה: פלוס — מגיב כבר בנגיעה קלה · מינוס — צריך ללחוץ חזק. רכות: פלוס — נגיעה קלה רכה יותר · מינוס — לחיצה חזקה רכה יותר.';ctls.appendChild(p);return;}
   if(k==='modeHint'){const p=document.createElement('p');p.className='hint2';p.id='modeHint';ctls.appendChild(p);return;}
   if(Array.isArray(a)){
     const row=document.createElement('div');row.className='segrow';row.innerHTML='<span>'+label+'</span>';
@@ -1072,6 +1094,9 @@ function syncCtls(){
       if(b.dataset.v==='custom')b.hidden=!H.tipId;});
     else{c.inp.value=o[k];c.out.textContent=o[k]+c.unit;}}
   inputs.gap.row.hidden=inputs.shadow.row.hidden=B.cross==='off';
+  // a curve (and the minimum) only matters when that link is on
+  inputs.minSize.row.hidden=inputs.cSize.row.hidden=!H.pSize;inputs.cOpacity.row.hidden=!H.pOpacity;
+  inputs.cFlow.row.hidden=!H.pFlow;inputs.cSoft.row.hidden=!H.pSoft;drawPGraph();
   inputs.mode.row.hidden=curHead===0;$('modeHint').hidden=curHead===0;$('modeHint').textContent=MODE_HINT[H.mode]||'';
   const many=B.heads.length>1;
   headSecs.forEach(d=>d.textContent=(many?'ראש '+(curHead+1)+' · ':'')+d.dataset.label);
@@ -1108,6 +1133,29 @@ function drawTipView(col){ // one dab of every head, large, so the feather and t
   const ext=Math.max(...B.heads.map(h=>h.scale/200+Math.hypot(h.offX,h.offY)/100*(h.offX||h.offY?1:0))),size=r.width*.45/Math.max(.05,ext);
   const bufs=B.heads.map(()=>makeBuf(cv.width,cv.height));
   renderStroke(cv.getContext('2d'),{b:{...B,size},color:col,erase:false,seed:7,pts:[{x:r.width/2,y:r.height/2,p:1,az:null}]},s,bufs);
+}
+// what each pressure link does to the current head, from a light touch to full pressure
+let pgLive=null;
+function drawPGraph(){
+  const cv=$('pGraph');if(!cv)return;const r=cv.getBoundingClientRect();if(!r.width)return;const s=window.devicePixelRatio||1;
+  cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);const x=cv.getContext('2d'),W=r.width,H=r.height,pad=6;x.scale(s,s);
+  const css=getComputedStyle(document.body),ink=css.color;x.clearRect(0,0,W,H);
+  x.strokeStyle=ink;x.globalAlpha=.15;x.lineWidth=1;x.strokeRect(pad+.5,pad+.5,W-2*pad-1,H-2*pad-1);
+  for(let i=1;i<4;i++){const gx=pad+(W-2*pad)*i/4;x.beginPath();x.moveTo(gx,pad);x.lineTo(gx,H-pad);x.stroke();}
+  x.globalAlpha=1;const h=B.heads[curHead];
+  const pc=(p,c)=>c?Math.pow(p,Math.pow(2,-c/50)):p;
+  const lines=[['#2f6fde',h.pSize,p=>Math.max(h.minSize/100,1-h.pSize/100*(1-pc(p,h.cSize)))],
+    ['#e5484d',h.pOpacity,p=>1-h.pOpacity/100*(1-pc(p,h.cOpacity))],
+    ['#30a46c',h.pFlow,p=>1-h.pFlow/100*(1-pc(p,h.cFlow))],
+    ['#a855f7',h.pSoft,p=>{const q=pc(p,h.cSoft),room=100-h.softness;return Math.min(100,h.softness+(h.pSoft>0?h.pSoft/100*room*(1-q):-h.pSoft/100*room*q))/100;}]];
+  // the graph reads left to right: light touch on the left, full pressure on the right
+  const X=p=>pad+p*(W-2*pad),Y=v=>H-pad-v*(H-2*pad);
+  lines.forEach(([c,on,f])=>{x.strokeStyle=c;x.lineWidth=on?2:1;x.globalAlpha=on?1:.18;x.setLineDash(on?[]:[3,3]);x.beginPath();
+    for(let i=0;i<=40;i++){const p=i/40;i?x.lineTo(X(p),Y(f(p))):x.moveTo(X(p),Y(f(p)));}x.stroke();});
+  x.setLineDash([]);x.globalAlpha=1;
+  if(pgLive!=null){x.strokeStyle=ink;x.globalAlpha=.6;x.lineWidth=1.5;x.beginPath();x.moveTo(X(pgLive),pad);x.lineTo(X(pgLive),H-pad);x.stroke();x.globalAlpha=1;}
+  x.fillStyle=css.getPropertyValue('--muted')||ink;x.font='10px system-ui';x.textBaseline='bottom';
+  x.textAlign='left';x.fillText('קל',pad+3,H-pad-2);x.textAlign='right';x.fillText('חזק',W-pad-3,H-pad-2);
 }
 function drawPreview(){if($('brushes').hidden)return;const col=erasing?inkCol():color;paintDemo($('prev'),B,col,64);drawTipView(col);}
 function renderLib(){
@@ -1354,7 +1402,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-16';
+const APP_BUILD='2026-10-16b';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1368,7 +1416,7 @@ function fmtVal(k,v){const e=specOf(k);if(!e)return String(v);
   if(Array.isArray(e[2])){const o=e[2].find(x=>x[0]===v);return o?o[1]:String(v);}
   return (typeof v==='number'?Math.round(v*10)/10:v)+(e[4]||'');}
 const labelOf=k=>{const e=specOf(k);return e?e[1]:k;};
-const HEAD_KEYS=['shape','flow','softness','spacing','roundness','angle','angleSrc','grain','scatter','sizeJitter','angleJitter','pSize','pOpacity','minSize'];
+const HEAD_KEYS=['shape','flow','softness','spacing','roundness','angle','angleSrc','grain','scatter','sizeJitter','angleJitter','pSize','minSize','cSize','pOpacity','cOpacity','pFlow','cFlow','pSoft','cSoft'];
 const MULTI_KEYS=['mode','strength','scale','offX','offY','offRel','colorMode'];
 function strokeStats(s){let len=0,pmin=1,pmax=0;s.pts.forEach((p,i)=>{if(i)len+=Math.hypot(p.x-s.pts[i-1].x,p.y-s.pts[i-1].y);pmin=Math.min(pmin,p.p);pmax=Math.max(pmax,p.p);});
   return{n:s.pts.length,len:Math.round(len),pmin:Math.round(pmin*100),pmax:Math.round(pmax*100)};}
@@ -1504,6 +1552,7 @@ function mapPressure(raw){const n=Math.min(1,Math.max(0,raw/penMax));return Math
 function syncPen(){$('penMax').value=Math.round(penMax*100);$('penMaxV').textContent=Math.round(penMax*100)+'%';
   $('penCurve').value=penCurve;$('penCurveV').textContent=penCurve>10?'רכה':penCurve<-10?'קשה':'רגיל';}
 function showPressure(raw){const out=mapPressure(raw);
+  if(!$('brushes').hidden){pgLive=out;drawPGraph();}
   $('pr').textContent=Math.round(out*100)+'%';
   if(!$('penPanel').hidden){$('pnRaw').style.width=raw*100+'%';$('pnRawV').textContent=Math.round(raw*100)+'%';
     $('pnOut').style.width=out*100+'%';$('pnOutV').textContent=Math.round(out*100)+'%';}}
