@@ -342,7 +342,7 @@ let color=COLORS[0], erasing=false, dpr=1;
 
 // =================== BRUSH ENGINE ===================
 const DEF={size:6,opacity:100,flow:100,softness:0,spacing:5,shape:'round',roundness:100,angle:0,angleSrc:'fixed',
-  grain:0,overlap:100,cross:'off',gap:25,scatter:0,sizeJitter:0,angleJitter:0,pSize:70,pOpacity:0,minSize:10,smoothing:20};
+  grain:0,overlap:100,cross:'off',gap:25,shadow:50,scatter:0,sizeJitter:0,angleJitter:0,pSize:70,pOpacity:0,minSize:10,smoothing:20};
 const PRESETS=[
   {id:'round',name:'עגול בסיסי',size:30,softness:0,spacing:4,pSize:0,pOpacity:0,minSize:100,smoothing:15},
   {id:'pencil',name:'עיפרון',size:4,opacity:90,flow:60,softness:30,spacing:10,shape:'chalk',grain:45,pSize:50,pOpacity:80,minSize:30,angleJitter:100,smoothing:15},
@@ -367,7 +367,7 @@ const PRESETS=[
 ];
 // A brush = settings for the whole stroke + 1–3 heads. Each head has its own tip and behaviour,
 // can sit off the line, and is combined with the heads before it by its mode.
-const BRUSH_KEYS=['size','opacity','overlap','smoothing','cross','gap'];
+const BRUSH_KEYS=['size','opacity','overlap','smoothing','cross','gap','shadow'];
 const HEAD_DEF={scale:100,offX:0,offY:0,offRel:'direction',mode:'add',strength:100,colorMode:'current',color:'#e5484d'};
 const MAX_HEADS=3;
 function headOf(f){const h={...HEAD_DEF};for(const k in DEF)if(!BRUSH_KEYS.includes(k))h[k]=f[k];if(f.tipId){h.tipId=f.tipId;h.tipData=f.tipData;}return h;}
@@ -378,7 +378,7 @@ function norm(src){ // preset / saved brush / older flat brush → {size,opacity
   return b;
 }
 const cloneB=b=>({...b,heads:b.heads.map(h=>({...h}))});
-const headBrush=(b,i)=>({...b.heads[i],size:b.size*b.heads[i].scale/100,master:b.size,cross:i===0?b.cross:'off',gap:b.gap});
+const headBrush=(b,i)=>({...b.heads[i],size:b.size*b.heads[i].scale/100,master:b.size,cross:i===0?b.cross:'off',gap:b.gap,shadow:b.shadow??0});
 
 function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 const hash=(x,y)=>{const s=Math.sin(x*127.1+y*311.7)*43758.5453;return s-Math.floor(s);};
@@ -443,9 +443,9 @@ function makeBuf(w,h){const b={W:w,H:h,used:null};allocBuf(b);return b;}
 function allocBuf(b){const n=b.W*b.H;b.f=new Float32Array(n);b.m=new Float32Array(n);b.f2=new Float32Array(n);b.fs=new Float32Array(n).fill(-1);}
 function sizeBuf(buf,w,h){buf.W=w;buf.H=h;const hadX=!!buf.hb;allocBuf(buf);buf.hb=buf.hs=buf.hm=null;if(hadX)crossBufs(buf);buf.used=null;}
 // hb: halo around a pass that crossed the stroke · hs: how far along the stroke that pass was
-function crossBufs(b){if(!b.hb){const n=b.W*b.H;b.hb=new Float32Array(n);b.hs=new Float32Array(n).fill(-1);b.hm=new Int8Array(n);}} // hm: 1 over, 2 under
+function crossBufs(b){if(!b.hb){const n=b.W*b.H;b.hb=new Float32Array(n).fill(1e9);b.hs=new Float32Array(n).fill(-1);b.hm=new Int8Array(n);}} // hm: 1 over, 2 under
 function resetBuf(buf){ // wipe only what the previous stroke touched
-  const u=buf.used;if(u){for(let y=u.y0;y<u.y1;y++){const a=y*buf.W+u.x0,z=y*buf.W+u.x1;buf.f.fill(0,a,z);buf.m.fill(0,a,z);buf.f2.fill(0,a,z);buf.fs.fill(-1,a,z);if(buf.hb){buf.hb.fill(0,a,z);buf.hs.fill(-1,a,z);buf.hm.fill(0,a,z);}}}
+  const u=buf.used;if(u){for(let y=u.y0;y<u.y1;y++){const a=y*buf.W+u.x0,z=y*buf.W+u.x1;buf.f.fill(0,a,z);buf.m.fill(0,a,z);buf.f2.fill(0,a,z);buf.fs.fill(-1,a,z);if(buf.hb){buf.hb.fill(1e9,a,z);buf.hs.fill(-1,a,z);buf.hm.fill(0,a,z);}}}
   buf.used=null;
 }
 function grow(buf,x0,y0,x1,y1){const u=buf.used;buf.used=u?{x0:Math.min(u.x0,x0),y0:Math.min(u.y0,y0),x1:Math.max(u.x1,x1),y1:Math.max(u.y1,y1)}:{x0,y0,x1,y1};}
@@ -469,11 +469,17 @@ function composite(bufs,r,s,target,base){
   // 2 = it goes under (the gap opens in the new pass around the older line)
   // 3 = random: each crossing decided its own way (stored per pixel in hm)
   const cross=!buf.hb?0:s.b.cross==='over'?1:s.b.cross==='under'?2:s.b.cross==='random'?3:0,HB=buf.hb,HS=buf.hs,HM=buf.hm,FS0=buf.fs,F0=buf.f,M0=buf.m,thr0=buf.thr||0;
-  let ring=null;if(cross>=2){const g=Math.max(1,buf.gpx||0);ring=[];
-    for(let i=0;i<16;i++){const a=i/16*Math.PI*2;ring.push([Math.round(Math.cos(a)*g),Math.round(Math.sin(a)*g)]);}
-    for(let i=0;i<8;i++){const a=(i+.5)/8*Math.PI*2;ring.push([Math.round(Math.cos(a)*g*.5),Math.round(Math.sin(a)*g*.5)]);}}
-  const oldNear=(k,px,py,hs)=>{let m=0;for(const[ox,oy]of ring){const qx=px+ox,qy=py+oy;if(qx<0||qy<0||qx>=W||qy>=H)continue;
-      const j=qy*W+qx,f=FS0[j];if(f<0||hs-f<=thr0)continue;const g=Math.max(F0[j],M0[j]);if(g>1e-4){const c=Math.min(1,(1-Math.exp(-g))/.9975);if(c>m)m=c;}}return m;};
+  // gap: a clean cut in the lower line next to the upper one · shadow: the lower line darkens toward the upper one
+  const gw=buf.gpx||0,sw=buf.spx||0,shStr=(s.b.shadow??0)/100,reach=gw+sw;
+  // for "under": distance from a pixel of the new pass to the older line, searched on a grid nearest-first
+  let offs=null;if(cross>=2&&reach>0){const st=Math.max(1,reach/10),R2=reach*reach;offs=[];
+    for(let oy=-reach;oy<=reach;oy+=st)for(let ox=-reach;ox<=reach;ox+=st){const d2=ox*ox+oy*oy;if(d2<=R2)offs.push([Math.round(ox),Math.round(oy),Math.sqrt(d2)]);}
+    offs.sort((a,b)=>a[2]-b[2]);}
+  const distOld=(px,py,fs)=>{for(const[ox,oy,dd]of offs){const qx=px+ox,qy=py+oy;if(qx<0||qy<0||qx>=W||qy>=H)continue;
+      const j=qy*W+qx,f=FS0[j];if(f<0||fs-f<=thr0)continue;const g=Math.max(F0[j],M0[j]);if(g>.7)return dd;}return 1e9;}; // g>.7 ≈ past the line's mid-edge
+  // returns how much to cut (0..1) and darken (0..1) for a pixel this far from the upper line
+  let cut=0,shade=0;const near=dd=>{cut=gw>0?Math.min(1,Math.max(0,gw-dd+.5)):0;
+    shade=sw>0&&shStr>0&&dd<reach?shStr*Math.pow(Math.max(0,1-Math.max(0,dd-gw)/sw),1.5):0;};
   for(let yy=0;yy<h;yy++){const row=(y0+yy)*W+x0;
    for(let xx=0;xx<w;xx++){
     const k=row+xx;let a1=0,as=0,a2=0,rev=false,cr=R,cg=G,cb=Bc;
@@ -488,12 +494,14 @@ function composite(bufs,r,s,target,base){
       else if(mo===3&&cs>as){cr=c[0];cg=c[1];cb=c[2];}
       a1=comb(a1,c1,mo);as=comb(as,cs,mo);a2=comb(a2,c2,mo);
     }
-    if(cross){const hs=HS[k],fs=FS0[k],cm=cross===3?HM[k]:cross;
+    if(cross){const hs=HS[k],fs=FS0[k],cm=cross===3?HM[k]:cross;cut=0;shade=0;
       if(!cm){}
-      else if(cm===1){if(!rev&&hs>=0&&fs>=0&&hs-fs>thr0)a1*=1-HB[k];}            // older line, beside the pass on top
-      else if(rev){a2=0;as=a1;rev=false;}                                     // the pass going under is hidden by the older line
-      else if(hs>=0&&a1>0&&fs>=0&&hs-fs<=thr0)a1*=1-oldNear(k,x0+xx,y0+yy,fs); // new pass, just beside the older line
+      else if(cm===1){if(!rev&&hs>=0&&fs>=0&&hs-fs>thr0)near(HB[k]);}                 // older line, beside the pass on top
+      else if(rev){a2=0;as=a1;rev=false;}                                         // the pass going under is hidden by the older line
+      else if(offs&&hs>=0&&a1>0&&fs>=0&&hs-fs<=thr0)near(distOld(x0+xx,y0+yy,fs)); // new pass, just beside the older line
       // ("older" = painted much earlier than this pixel, so the same arm painted a moment before doesn't count)
+      if(cut)a1*=1-cut;
+      if(shade){const kd=1-shade*.75;cr*=kd;cg*=kd;cb*=kd;}
     }
     // where the stroke came back over itself: 0 = ink just merges (no darkening), 100 = the second pass glazes on top
     let sa;if(!rev)sa=op*a1;else{const S=op*as,O=1-(1-op*a1)*(1-op*a2);sa=S+(O-S)*t;}
@@ -532,12 +540,11 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm){
   buf.again=again;
   if(gw==null||!again||!buf.hb)return{x0,y0,x1,y1};
   // this dab crosses an earlier part of the stroke: mark its footprint grown by the gap width
-  const HB=buf.hb,HS=buf.hs,HM=buf.hm,Rr=r+gw,iR=1/Rr,iRd=1/(Rr*rd);
+  const HB=buf.hb,HS=buf.hs,HM=buf.hm,Rr=r+gw,rr=r*.92; // edge taken just inside the rim, where the ink is solid
   const X0=Math.max(0,Math.floor(cx-Rr)),X1=Math.min(W,Math.ceil(cx+Rr)+1),Y0=Math.max(0,Math.floor(cy-Rr)),Y1=Math.min(H,Math.ceil(cy+Rr)+1);
   for(let py=Y0;py<Y1;py++)for(let px=X0;px<X1;px++){
-    const dx=px+.5-cx,dy=py+.5-cy,u=(c*dx+si*dy)*iR,v=(-si*dx+c*dy)*iRd;if(u<=-1||u>=1||v<=-1||v>=1)continue;
-    const val=Math.min(1,A[Math.min(N-1,Math.floor((v+1)*half))*N+Math.min(N-1,Math.floor((u+1)*half))]);
-    if(val>0){const k=py*W+px;if(val>HB[k])HB[k]=val;if(sd>=HS[k]){HS[k]=sd;HM[k]=cm;}}
+    const dx=px+.5-cx,dy=py+.5-cy,u=(c*dx+si*dy)/rr,v=(-si*dx+c*dy)/(rr*rd),e=(Math.hypot(u,v)-1)*rr*(rd<1?rd:1);
+    if(e>=gw)continue;const k=py*W+px,dd=e<0?0:e;if(dd<HB[k])HB[k]=dd;if(sd>=HS[k]){HS[k]=sd;HM[k]=cm;}
   }
   return{x0:X0,y0:Y0,x1:X1,y1:Y1};
 }
@@ -550,12 +557,13 @@ function stamper(buf,b,seed,scale){
   // distance travelled along the stroke, in canvas pixels; a pixel revisited after more than this counts as a second pass
   // Measured with a point on a short leash behind the pen: it only moves when the pen really moves on,
   // so hand tremor (tiny back-and-forth readings) doesn't add distance and make a stroke look like it doubled back.
-  let sNow=0,sA=0,ax=0,ay=0,started=false;const leash=Math.max(1,b.size*.2),thr=(b.size*(1.15+2*b.scatter/100)+2)*scale;
-  const crossOn=b.cross==='over'||b.cross==='under'||b.cross==='random',gw=(b.gap||0)/100*b.master*.5*scale;
+  let sNow=0,sA=0,ax=0,ay=0,started=false;const leash=Math.max(2.5,b.size*.25),thr=(b.size*(1.15+2*b.scatter/100)+2*leash+4)*scale;
+  const crossOn=b.cross==='over'||b.cross==='under'||b.cross==='random',gapPx=(b.gap||0)/100*b.master*.5*scale;
+  const shPx=(b.shadow||0)>0?Math.max(2*scale,b.master*.45*scale):0,gw=gapPx+shPx; // the marked area reaches past the gap into the shadow
   // random: its own seeded sequence, so the brush's other randomness stays the same and undo redraws it exactly
   const crng=mulberry(seed^0x5bd1e995),pickMode=()=>b.cross==='random'?(crng()<.5?1:2):b.cross==='under'?2:1;
   let inCross=false,lastCross=0,curMode=0,nextMode=pickMode();
-  buf.thr=thr;buf.gpx=gw;if(crossOn)crossBufs(buf);
+  buf.thr=thr;buf.gpx=gapPx;buf.spx=shPx;if(crossOn)crossBufs(buf);
   const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true;
   const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
   const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-p));
@@ -823,7 +831,7 @@ const MODE_HINT={add:'שני הראשים מציירים יחד',mask:'טקסט�
 const SPEC=[
   ['g','המברשת כולה'],
   ['size','גודל',1,120,'px','b'],['opacity','שקיפות',1,100,'%','b'],['overlap','הכהיה בחפיפה',0,100,'%','b'],['smoothing','החלקת קו',0,95,'%','b'],
-  ['cross','קו שחוצה את עצמו',[['off','רגיל'],['over','עובר מעל'],['under','עובר מתחת'],['random','אקראי']],null,null,'b'],['gap','רווח בהצלבה',0,100,'%','b'],
+  ['cross','קו שחוצה את עצמו',[['off','רגיל'],['over','עובר מעל'],['under','עובר מתחת'],['random','אקראי']],null,null,'b'],['gap','רווח בהצלבה',0,100,'%','b'],['shadow','צל בהצלבה',0,100,'%','b'],
   ['heads'],
   ['gh','מיקום וחיבור'],
   ['mode','מתחבר לראשים שלפניו',[['add','הוספה'],['mask','מסכה'],['sub','חיסור'],['max','החזק']],null,null,'h'],
@@ -894,7 +902,7 @@ function syncCtls(){
     if(c.seg)c.seg.querySelectorAll('button').forEach(b=>{b.classList.toggle('on',b.dataset.v===o[k]);
       if(b.dataset.v==='custom')b.hidden=!H.tipId;});
     else{c.inp.value=o[k];c.out.textContent=o[k]+c.unit;}}
-  inputs.gap.row.hidden=B.cross==='off';
+  inputs.gap.row.hidden=inputs.shadow.row.hidden=B.cross==='off';
   inputs.mode.row.hidden=curHead===0;$('modeHint').hidden=curHead===0;$('modeHint').textContent=MODE_HINT[H.mode]||'';
   const many=B.heads.length>1;
   headSecs.forEach(d=>d.textContent=(many?'ראש '+(curHead+1)+' · ':'')+d.dataset.label);
