@@ -352,6 +352,7 @@ input[type=range]{width:110px;accent-color:var(--accent)}
     <div class="grp">
       <button id="brushBtn" class="on" aria-expanded="true" title="מברשות"><svg viewBox="0 0 24 24"><path d="M14 4l6 6-8 8H6v-6z"/><path d="M4 20c1-3 2-4 4-4"/></svg><span id="brushName">דיו</span></button>
       <button id="tEraser" title="מחק" aria-label="מחק"><svg viewBox="0 0 24 24"><path d="M3 17l8-8 7 7-4 4H7z"/><path d="M14 20h7"/></svg></button>
+      <button id="tSmudge" title="מריחה" aria-label="מריחה"><svg viewBox="0 0 24 24"><path d="M9 21v-7.5a1.5 1.5 0 0 1 3 0V12a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1 3 0v3.5c0 2.5-1.8 4.5-4.5 4.5H12"/><path d="M12 12V5.5a1.5 1.5 0 0 0-3 0v8"/><path d="M3 9c2-1 3-1 4 0"/></svg></button>
     </div>
     <div class="sep"></div>
     <div class="grp" id="swatches"></div>
@@ -437,12 +438,12 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 const $=id=>document.getElementById(id);
 const stack=$('stack');
 const COLORS=['#1f2328','#e5484d','#f5a524','#30a46c','#2f6fde','#ffffff'];
-let color=COLORS[0], erasing=false, dpr=1;
+let color=COLORS[0], erasing=false, smudging=false, tool='draw', dpr=1;
 
 // =================== BRUSH ENGINE ===================
 const DEF={size:6,opacity:100,flow:100,softness:0,spacing:5,shape:'round',roundness:100,angle:0,angleSrc:'fixed',
   grain:0,overlap:100,cross:'off',gap:25,shadow:50,scatter:0,sizeJitter:0,angleJitter:0,pSize:70,pOpacity:0,minSize:10,smoothing:20,
-  cSize:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0,opJitter:0,flowJitter:0,fadeLen:0,fadeOpacity:100,fadeSize:0};
+  cSize:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0,opJitter:0,flowJitter:0,fadeLen:0,fadeOpacity:100,fadeSize:0,smudge:70};
 const PRESETS=[
   {id:'round',name:'עגול בסיסי',size:30,softness:0,spacing:4,pSize:0,pOpacity:0,minSize:100,smoothing:15},
   {id:'pencil',name:'עיפרון',size:4,opacity:90,flow:60,softness:30,spacing:10,shape:'chalk',grain:45,pSize:50,pOpacity:80,minSize:30,angleJitter:100,smoothing:15},
@@ -467,7 +468,7 @@ const PRESETS=[
 ];
 // A brush = settings for the whole stroke + 1–3 heads. Each head has its own tip and behaviour,
 // can sit off the line, and is combined with the heads before it by its mode.
-const BRUSH_KEYS=['size','opacity','overlap','smoothing','cross','gap','shadow'];
+const BRUSH_KEYS=['size','opacity','overlap','smoothing','cross','gap','shadow','smudge'];
 const HEAD_DEF={scale:100,offX:0,offY:0,offRel:'direction',mode:'add',strength:100,colorMode:'current',color:'#e5484d'};
 const MAX_HEADS=3;
 function headOf(f){const h={...HEAD_DEF};for(const k in DEF)if(!BRUSH_KEYS.includes(k))h[k]=f[k];if(f.tipId){h.tipId=f.tipId;h.tipData=f.tipData;}return h;}
@@ -693,7 +694,7 @@ function stamper(buf,b,seed,scale){
   // Opacity (by pressure, jitter or fade) is a level the pixel shows at most, like Photoshop's opacity:
   // half pressure = half as dark, whatever the spacing or flow. (Scaling the ink density instead made it
   // nearly full-dark already at light pressure, because overlapping dabs add up.)
-  const capOn=!!(b.pOpacity||b.opJitter||(fadeOn&&b.fadeOpacity));
+  const capOn=!buf.dabFn&&!!(b.pOpacity||b.opJitter||(fadeOn&&b.fadeOpacity));
   if(capOn&&!buf.o){buf.o=new Float32Array(buf.W*buf.H).fill(-1);buf.o2=new Float32Array(buf.W*buf.H).fill(-1);}
   const pFl=b.pFlow||0,pSo=b.pSoft||0,custom=b.shape==='custom'&&tipMasks.has(b.tipId),Ts=[];
   const dtOf=p=>{if(!pFl&&!b.flowJitter)return Dt;const fl=b.flow/100*(1-pFl/100*(1-pc(p,b.cFlow)))*(b.flowJitter?1-b.flowJitter/100*jrng():1);return -Math.log(1-Math.min(.9975,Math.max(.005,fl)));};
@@ -717,7 +718,7 @@ function stamper(buf,b,seed,scale){
     const r=Math.max(.6,sz/2*scale);
     // first dab is full strength (so a tap leaves a solid dot); later dabs share the density along the path
     const D=Dp*lvl*(first?1:Math.min(1,step*scale/(Tp.F*r)));first=false;
-    const box=rasterDab(buf,Tp,x*scale,y*scale,r,ang,rd,D,Dp*lvl,sNow,thr,crossOn?gw:null,inCross?curMode:nextMode,inCross?runStart:sNow);
+    const box=buf.dabFn?buf.dabFn(Tp,x*scale,y*scale,r,ang,rd,lvl,step*scale):rasterDab(buf,Tp,x*scale,y*scale,r,ang,rd,D,Dp*lvl,sNow,thr,crossOn?gw:null,inCross?curMode:nextMode,inCross?runStart:sNow);
     if(crossOn&&buf.again){if(!inCross){inCross=true;runStart=sNow;curMode=nextMode;nextMode=pickMode();}lastCross=sNow;}
     else if(inCross&&sNow-lastCross>thr)inCross=false; // the crossing is over once the brush has moved a brush-width past it
     if(box)dirty=dirty?{x0:Math.min(dirty.x0,box.x0),y0:Math.min(dirty.y0,box.y0),x1:Math.max(dirty.x1,box.x1),y1:Math.max(dirty.y1,box.y1)}:box;
@@ -747,7 +748,47 @@ const uni=(a,b)=>!a?b:!b?a:{x0:Math.min(a.x0,b.x0),y0:Math.min(a.y0,b.y0),x1:Mat
 // heads need one buffer each; full-size buffers are made only when a brush with that many heads is used
 let bufW=1,bufH=1;const pool=[];
 function bufsFor(n){while(pool.length<n)pool.push(makeBuf(bufW,bufH));return pool.slice(0,n);}
+// ---- Smudge: drags the paint that's already on the layer, like a finger. Adds no colour of its own. ----
+// The brush carries a small patch of paint. At every dab the pixels under the tip move toward the patch
+// (by the tip's shape × the amount: brush opacity, and pressure if "pressure → opacity" is on),
+// then the patch takes up some of what it now sits on. "Smudge strength" = how much the patch keeps
+// from before, i.e. how far the paint is pulled along.
+function smudger(ctx,s,scale){
+  const cv=ctx.canvas,W=cv.width,H=cv.height,img=ctx.getImageData(0,0,W,H),d=img.data;
+  const hb={...headBrush(s.b,0),cross:'off'},keep=Math.min(.995,(s.b.smudge??70)/100),op=s.b.opacity/100;
+  const Rm=Math.ceil(hb.size*scale/2*1.05)+2,P=2*Rm+1,C=new Float32Array(P*P*4),L=-Math.log(1-.9975);let init=false;
+  const buf={W,H,dabFn(T,cx,cy,r,ang,rd,amt,stp){
+    // amounts are per brush-width of travel, so dense or sparse spacing smudges the same
+    const fr=Math.min(1,(stp||0)/(2*r));amt=1-Math.pow(1-Math.min(.995,amt*op),fr);const q=1-Math.pow(keep,fr);const icx=Math.round(cx),icy=Math.round(cy),R=Math.min(Rm,Math.ceil(r)+1);
+    if(!init){init=true;for(let y=-Rm;y<=Rm;y++)for(let x=-Rm;x<=Rm;x++){const px=icx+x,py=icy+y,k=((y+Rm)*P+x+Rm)*4;
+      if(px<0||py<0||px>=W||py>=H)continue;const i=(py*W+px)*4,a=d[i+3]/255;C[k]=d[i]*a;C[k+1]=d[i+1]*a;C[k+2]=d[i+2]*a;C[k+3]=a;}}
+    let lv=T.lv?T.lv[0]:T;if(T.lv)for(const l of T.lv){if(l.N>=2*r*.8)lv=l;else break;}
+    const N=lv.N,A=lv.a,c=Math.cos(ang),si=Math.sin(ang),ir=1/r,ird=1/(r*rd),half=N/2;
+    const x0=Math.max(0,icx-R),x1=Math.min(W-1,icx+R),y0=Math.max(0,icy-R),y1=Math.min(H-1,icy+R);if(x1<x0||y1<y0)return null;
+    for(let py=y0;py<=y1;py++)for(let px=x0;px<=x1;px++){
+      const dx=px+.5-cx,dy=py+.5-cy,u=(c*dx+si*dy)*ir,v=(-si*dx+c*dy)*ird;if(u<=-1||u>=1||v<=-1||v>=1)continue;
+      const tx=(u+1)*half-.5,ty=(v+1)*half-.5;let ix=Math.floor(tx),iy=Math.floor(ty);const fx=tx-ix,fy=ty-iy;
+      const ix1=Math.min(N-1,ix+1),iy1=Math.min(N-1,iy+1);ix=Math.max(0,ix);iy=Math.max(0,iy);
+      const g=(A[iy*N+ix]+(A[iy*N+ix1]-A[iy*N+ix])*fx)*(1-fy)+(A[iy1*N+ix]+(A[iy1*N+ix1]-A[iy1*N+ix])*fx)*fy;
+      const t=Math.min(1,(1-Math.exp(-g*L))/.9975)*amt;if(t<=0)continue;
+      const k=((py-icy+Rm)*P+px-icx+Rm)*4,i=(py*W+px)*4,a=d[i+3]/255;
+      const tr=d[i]*a,tg=d[i+1]*a,tb=d[i+2]*a;
+      // colours mix by how much paint each side has; the paint never gets thinner than it was
+      // (dragging empty paper over a line pushes the colour along instead of rubbing it out)
+      const mr=tr+(C[k]-tr)*t,mg=tg+(C[k+1]-tg)*t,mb=tb+(C[k+2]-tb)*t,ma=a+(C[k+3]-a)*t;
+      if(ma<1/512)continue;const na=Math.max(a,ma),kk=na/ma,nr=mr*kk,ng=mg*kk,nb=mb*kk;
+      d[i]=mr/ma;d[i+1]=mg/ma;d[i+2]=mb/ma;d[i+3]=na*255;
+      C[k]+=(nr-C[k])*q;C[k+1]+=(ng-C[k+1])*q;C[k+2]+=(nb-C[k+2])*q;C[k+3]+=(na-C[k+3])*q;
+    }
+    return{x0,y0,x1:x1+1,y1:y1+1};}};
+  const st=stamper(buf,hb,s.seed,scale);
+  st.put=rc=>{if(!rc)return;const x0=Math.max(0,Math.floor(rc.x0)),y0=Math.max(0,Math.floor(rc.y0)),x1=Math.min(W,Math.ceil(rc.x1)),y1=Math.min(H,Math.ceil(rc.y1));
+    if(x1>x0&&y1>y0)ctx.putImageData(img,0,0,x0,y0,x1-x0,y1-y0);};
+  return st;
+}
 function renderStroke(target,s,scale,bufs){
+  if(s.smudge){const sm=smudger(target,s,scale);sm.first(s.pts[0]);let prev=s.pts[0];
+    const f=feeder(pt=>{sm.seg(prev,pt);prev=pt;});s.pts.forEach(q=>f.push(q));f.end();sm.finish();sm.put(sm.take());return;}
   const n=s.b.heads.length;bufs=bufs||bufsFor(n);let rect=null;
   for(let i=0;i<n;i++){
     resetBuf(bufs[i]);const st=stamper(bufs[i],headBrush(s.b,i),s.seed+i*7919,scale);
@@ -842,7 +883,7 @@ function feeder(emit){const P=[];
 }
 let startPending=false;
 function beginStroke(){startPending=false;const p=cur.pts[0];st.forEach(t=>t.first(p));fd.push(p);}
-function liveUpdate(){let r=null;st.forEach(t=>r=uni(r,t.take()));composite(cur.bufs,r,cur,active.ctx,snapX);}
+function liveUpdate(){let r=null;st.forEach(t=>r=uni(r,t.take()));if(cur.smudge){st[0].put(r);return;}composite(cur.bufs,r,cur,active.ctx,snapX);}
 // is a panel, the dock or any control on top of the canvas at this point? (then the pen is aimed at it, not at the drawing)
 function overUI(e){const t=document.elementFromPoint(e.clientX,e.clientY);return!!(t&&t!==stack&&!stack.contains(t)&&t.closest('.panel,.dock,button,input,label,header,#status,.pill'));}
 stack.addEventListener('pointerdown',e=>{
@@ -853,12 +894,12 @@ stack.addEventListener('pointerdown',e=>{
   if(!active.visible){toast('השכבה מוסתרת – הפעל את העין כדי לצייר');return;}
   activeId=e.pointerId;try{stack.setPointerCapture(e.pointerId);}catch(_){}
   const p=raw(e);lastRaw=p;
-  cur={b:cloneB(effB()),color,erase:erasing,seed:(Math.random()*2**31)|0,pts:[p]};
+  cur={b:cloneB(effB()),color,erase:erasing,smudge:smudging||undefined,seed:(Math.random()*2**31)|0,pts:[p]};
   {const src=allBrushes().find(x=>x.id===bid);cur.bname=(src?src.name:'מברשת')+(modified?' (שונתה)':'')+(solo?' · בידוד: '+labelOf(solo):'');}
   Object.defineProperty(cur,'ptype',{value:e.pointerType,enumerable:false});
   const bufs=bufsFor(cur.b.heads.length);bufs.forEach(resetBuf);
   snapX.setTransform(1,0,0,1,0,0);snapX.globalAlpha=1;snapX.globalCompositeOperation='copy';snapX.drawImage(active.canvas,0,0);snapX.globalCompositeOperation='source-over';
-  st=cur.b.heads.map((h,i)=>stamper(bufs[i],headBrush(cur.b,i),cur.seed+i*7919,dpr));
+  st=cur.smudge?[smudger(active.ctx,cur,dpr)]:cur.b.heads.map((h,i)=>stamper(bufs[i],headBrush(cur.b,i),cur.seed+i*7919,dpr));
   prevEmit=p;fd=feeder(pt=>{st.forEach(t=>t.seg(prevEmit,pt));prevEmit=pt;});
   // The pen's first pressure reading (at touch-down) is often higher than what follows, which left a round
   // blob at the start of light strokes. With the pen, the first dab waits for the first real movement.
@@ -1056,7 +1097,7 @@ const MODE_HINT={add:'שני הראשים מציירים יחד',mask:'טקסט�
 // [key, label, min|options, max, unit, scope]  scope b = whole brush, h = current head
 const SPEC=[
   ['g','המברשת כולה'],
-  ['size','גודל',1,120,'px','b'],['opacity','שקיפות',1,100,'%','b'],['overlap','הכהיה בחפיפה',0,100,'%','b'],['smoothing','החלקת קו',0,95,'%','b'],
+  ['size','גודל',1,120,'px','b'],['opacity','שקיפות',1,100,'%','b'],['smudge','עוצמת מריחה',0,100,'%','b'],['overlap','הכהיה בחפיפה',0,100,'%','b'],['smoothing','החלקת קו',0,95,'%','b'],
   ['cross','קו שחוצה את עצמו',[['off','רגיל'],['over','עובר מעל'],['under','עובר מתחת'],['random','אקראי']],null,null,'b'],['gap','רווח בהצלבה',0,100,'%','b'],['shadow','צל בהצלבה',0,100,'%','b'],
   ['heads'],
   ['gh','מיקום וחיבור'],
@@ -1090,7 +1131,7 @@ const SPEC=[
 const ctls=$('ctls'),inputs={},headSecs=[];
 // ---- Solo: draw with one parameter (and what belongs to it) while everything else is neutral ----
 let solo=null;
-const NO_SOLO=['size','smoothing','mode','strength','scale','offX','offY','offRel','colorMode'];
+const NO_SOLO=['size','smoothing','smudge','mode','strength','scale','offX','offY','offRel','colorMode'];
 const SOLO_GROUPS=[['pSize','minSize','cSize'],['pOpacity','cOpacity'],['pFlow','cFlow','flow'],['pSoft','cSoft','softness'],
   ['fadeLen','fadeOpacity','fadeSize'],['roundness','angle','angleSrc'],['cross','gap','shadow'],['shape','tipId','tipData']];
 const soloKeys=k=>{const g=SOLO_GROUPS.find(g=>g.includes(k));return g||[k];};
@@ -1149,7 +1190,7 @@ function renderHeads(){
     requestAnimationFrame(()=>{const r=cv.getBoundingClientRect();if(!r.width)return;const s=window.devicePixelRatio||1;
       cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);
       const one={...B,size:r.height*.8/Math.max(.05,h.scale/100),heads:[{...h,offX:0,offY:0,mode:'add',strength:100}]};
-      renderStroke(cv.getContext('2d'),{b:one,color:erasing?inkCol():color,erase:false,seed:7,pts:[{x:r.width/2,y:r.height/2,p:1,az:null}]},s,[makeBuf(cv.width,cv.height)]);});
+      renderStroke(cv.getContext('2d'),{b:one,color:tool!=='draw'?inkCol():color,erase:false,seed:7,pts:[{x:r.width/2,y:r.height/2,p:1,az:null}]},s,[makeBuf(cv.width,cv.height)]);});
   });
   if(B.heads.length<MAX_HEADS){const add=document.createElement('button');add.textContent='+ ראש';add.className='add';
     add.onclick=()=>{const h={...B.heads[curHead],mode:'add',strength:100,offY:(B.heads[curHead].offY||0)+40};
@@ -1178,14 +1219,17 @@ function syncCtls(){
   renderHeads();
   $('size').value=B.size;
   const src=allBrushes().find(x=>x.id===bid);
-  $('brushName2').innerHTML=(erasing?'מחק · ':'')+(src?src.name:'מברשת')+(modified?' <em>· שונתה</em>':'');
-  if(!erasing||eraseLinked)$('brushName').textContent=src?src.name:'מברשת';
-  $('eraserRow').hidden=!erasing;$('eraserMode').querySelectorAll('button').forEach(b=>b.classList.toggle('on',(b.dataset.v==='same')===eraseLinked));
+  $('brushName2').innerHTML=(erasing?'מחק · ':smudging?'מריחה · ':'')+(src?src.name:'מברשת')+(modified?' <em>· שונתה</em>':'');
+  if(tool==='draw'||toolLinked[tool])$('brushName').textContent=src?src.name:'מברשת';
+  $('eraserRow').hidden=tool==='draw';$('eraserRow').querySelector('span').textContent=smudging?'המריחה':'המחק';
+  $('eraserMode').querySelector('[data-v=own]').textContent=smudging?'מברשת משלה':'מחק משלו';
+  $('eraserMode').querySelectorAll('button').forEach(b=>b.classList.toggle('on',(b.dataset.v==='same')===!!toolLinked[tool]));
+  inputs.smudge.row.hidden=!smudging;['overlap','cross'].forEach(k=>inputs[k].row.hidden=smudging);if(smudging)inputs.gap.row.hidden=inputs.shadow.row.hidden=true;
   $('brReset').hidden=!modified;$('brUpdate').hidden=!(modified&&bid.startsWith('c'));
   updDot();
 }
 let prevT;
-function changed(k){modified=true;if(erasing&&!eraseLinked)persistEraser();syncCtls();clearTimeout(prevT);prevT=setTimeout(drawPreview,k==='size'?60:20);}
+function changed(k){modified=true;if(tool!=='draw'&&!toolLinked[tool])persistTools();syncCtls();clearTimeout(prevT);prevT=setTimeout(drawPreview,k==='size'?60:20);}
 function selectBrush(id){const src=allBrushes().find(x=>x.id===id);if(!src)return;
   B=norm(src);bid=id;curHead=0;modified=false;solo=null;syncCtls();drawPreview();renderLib();}
 function demo(w,h,b,cap){
@@ -1230,7 +1274,7 @@ function drawPGraph(){
   x.fillStyle=css.getPropertyValue('--muted')||ink;x.font='10px system-ui';x.textBaseline='bottom';
   x.textAlign='left';x.fillText('קל',pad+3,H-pad-2);x.textAlign='right';x.fillText('חזק',W-pad-3,H-pad-2);
 }
-function drawPreview(){if($('brushes').hidden)return;const col=erasing?inkCol():color;paintDemo($('prev'),effB(),col,64);drawTipView(col);}
+function drawPreview(){if($('brushes').hidden)return;const col=tool!=='draw'?inkCol():color;paintDemo($('prev'),effB(),col,64);drawTipView(col);}
 function renderLib(){
   const lib=$('lib');lib.innerHTML='';const ink=inkCol();
   allBrushes().forEach(br=>{
@@ -1315,7 +1359,7 @@ function teChanged(){clearTimeout(teT);teT=setTimeout(()=>{
   if(!m){pv.getContext('2d').clearRect(0,0,pv.width,pv.height);return;}
   tipMasks.set('__preview',m);tipCache.clear();grayCache.clear();
   x.drawImage(tip({shape:'custom',tipId:'__preview'},inkCol()),8,8,mc.width-16,mc.height-16);
-  paintDemo(pv,teBrush(),erasing?inkCol():color,40);
+  paintDemo(pv,teBrush(),tool!=='draw'?inkCol():color,40);
 },60);}
 function openEditor(){
   $('tipEditor').hidden=false;$('teName').value='';
@@ -1357,36 +1401,45 @@ function togglePanel(p,btn,other,otherBtn){
   if(open&&p===$('brushes')){drawPreview();renderLib();}
 }
 $('lyToggle').onclick=()=>togglePanel($('layers'),$('lyToggle'),$('brushes'),$('brushBtn'));
-$('brushBtn').onclick=()=>{if(erasing){setErase(false);if(!$('brushes').hidden)return;}togglePanel($('brushes'),$('brushBtn'),$('layers'),$('lyToggle'));};
+$('brushBtn').onclick=()=>{if(tool!=='draw'){setTool('draw');if(!$('brushes').hidden)return;}togglePanel($('brushes'),$('brushBtn'),$('layers'),$('lyToggle'));};
 $('brClose').onclick=()=>setPanel($('brushes'),$('brushBtn'),false);
 
 let tt;function toast(m){const t=$('toast');t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,2200);}
 
 // =================== DOCK ===================
-// The eraser has its own brush (a basic round one to start), edited in the same panel while erasing,
-// unless "like the brush" is chosen — then it erases with exactly the brush you draw with.
-let drawState=null,eraseLinked=false,eraseState={B:norm({...PRESETS[0],size:30}),bid:'round',modified:false,curHead:0};
-try{const e=JSON.parse(localStorage.getItem('pencil-eraser')||'null');if(e){eraseLinked=!!e.linked;if(e.B)eraseState={B:norm(e.B),bid:e.bid||'',modified:!!e.modified,curHead:0};}}catch(_){}
-function persistEraser(){const st=erasing&&!eraseLinked?{B,bid,modified}:eraseState;
-  try{localStorage.setItem('pencil-eraser',JSON.stringify({linked:eraseLinked,B:st.B,bid:st.bid,modified:st.modified}));}catch(_){}}
+// The eraser and the smudge tool each have their own brush (eraser: basic round; smudge: soft round),
+// edited in the same panel while that tool is on, unless "like the brush" is chosen — then the tool uses
+// exactly the brush you draw with.
+let drawState=null;const toolLinked={erase:false,smudge:false};
+const toolStates={erase:{B:norm({...PRESETS[0],size:30}),bid:'round',modified:false,curHead:0},
+  smudge:{B:norm({...PRESETS[0],size:40,softness:60,smudge:70}),bid:'',modified:false,curHead:0}};
+const TOOL_KEY={erase:'pencil-eraser',smudge:'pencil-smudge'};
+for(const t in TOOL_KEY)try{const e=JSON.parse(localStorage.getItem(TOOL_KEY[t])||'null');if(e){toolLinked[t]=!!e.linked;if(e.B)toolStates[t]={B:norm(e.B),bid:e.bid||'',modified:!!e.modified,curHead:0};}}catch(_){}
 const grabState=()=>({B,bid,modified,curHead});
 function useState(st){B=st.B;bid=st.bid;modified=st.modified;curHead=st.curHead||0;}
-function setErase(on){
-  if(on!==erasing&&!eraseLinked){
-    if(on){drawState=grabState();useState(eraseState);}
-    else{eraseState=grabState();persistEraser();if(drawState)useState(drawState);}
+function persistTools(){for(const t in TOOL_KEY){const st=tool===t&&!toolLinked[t]?grabState():toolStates[t];
+  try{localStorage.setItem(TOOL_KEY[t],JSON.stringify({linked:toolLinked[t],B:st.B,bid:st.bid,modified:st.modified}));}catch(_){}}}
+const ownsDraw=t=>t==='draw'||toolLinked[t]; // the brush in use is the drawing brush
+function setTool(t){
+  if(t!==tool){
+    if(ownsDraw(tool))drawState=grabState();else toolStates[tool]=grabState();
+    if(ownsDraw(t)){if(drawState)useState(drawState);}else useState(toolStates[t]);
+    tool=t;persistTools();
   }
-  erasing=on;$('tEraser').classList.toggle('on',on);
+  erasing=t==='erase';smudging=t==='smudge';
+  $('tEraser').classList.toggle('on',erasing);$('tSmudge').classList.toggle('on',smudging);
   syncCtls();renderLib();updDot();drawPreview();if($('colorBtn'))updColorBtn();
 }
-$('tEraser').onclick=()=>{
-  if(!erasing){setErase(true);return;}
-  togglePanel($('brushes'),$('brushBtn'),$('layers'),$('lyToggle')); // second tap: open the eraser's settings
-};
+function setErase(on){setTool(on?'erase':'draw');}
+const toolBtn=(id,t)=>{$(id).onclick=()=>{
+  if(tool!==t){setTool(t);return;}
+  togglePanel($('brushes'),$('brushBtn'),$('layers'),$('lyToggle')); // second tap: open the tool's settings
+};};
+toolBtn('tEraser','erase');toolBtn('tSmudge','smudge');
 $('eraserMode').querySelectorAll('button').forEach(b=>b.onclick=()=>{
-  const linked=b.dataset.v==='same';if(linked===eraseLinked)return;
-  if(erasing){if(linked){eraseState=grabState();useState(drawState||grabState());}else{drawState=grabState();useState(eraseState);}}
-  eraseLinked=linked;persistEraser();syncCtls();renderLib();updDot();drawPreview();
+  if(tool==='draw')return;const linked=b.dataset.v==='same';if(linked===toolLinked[tool])return;
+  if(linked){toolStates[tool]=grabState();useState(drawState||grabState());}else{drawState=grabState();useState(toolStates[tool]);}
+  toolLinked[tool]=linked;persistTools();syncCtls();renderLib();updDot();drawPreview();
 });
 const swBox=$('swatches');
 function selColor(c,btn){color=c;swBox.querySelectorAll('.sw').forEach(s=>s.classList.toggle('on',s===btn));setErase(false);updDot();drawPreview();updColorBtn();
@@ -1395,7 +1448,7 @@ COLORS.forEach((c,i)=>{const b=document.createElement('button');b.className='sw'
   b.setAttribute('aria-label','צבע '+c);b.onclick=()=>selColor(c,b);swBox.appendChild(b);});
 const dot=$('dot');
 function updDot(){const d=Math.max(3,Math.min(28,B.size*.6+2));dot.style.width=dot.style.height=d+'px';
-  dot.style.background=erasing?'var(--muted)':color;dot.style.borderRadius=B.heads[0].shape==='square'?'3px':'50%';}
+  dot.style.background=tool!=='draw'?'var(--muted)':color;dot.style.borderRadius=B.heads[0].shape==='square'?'3px':'50%';}
 $('size').oninput=e=>{B.size=+e.target.value;changed('size');};
 $('clear').onclick=()=>{
   if(!active.strokes.length)return;
@@ -1467,7 +1520,7 @@ function openColors(target){const p=$('colors'),same=!p.hidden&&coTarget===targe
   setPanel(p,$('colorBtn'),!same);$('colorBtn').classList.toggle('on',!same&&target==='brush');
   if(!same){hsv=hex2hsv(curTargetColor());requestAnimationFrame(drawPicker);}
   renderLayers();}
-function updColorBtn(){$('colorBtn').querySelector('i').style.background=erasing?'transparent':color;}
+function updColorBtn(){$('colorBtn').querySelector('i').style.background=tool!=='draw'?'transparent':color;}
 $('colorBtn').onclick=()=>openColors('brush');
 $('coClose').onclick=()=>{setPanel($('colors'),$('colorBtn'),false);renderLayers();};
 applyBg();updColorBtn();
@@ -1475,7 +1528,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-16g';
+const APP_BUILD='2026-10-16h';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1496,7 +1549,7 @@ function strokeStats(s){let len=0,pmin=1,pmax=0;s.pts.forEach((p,i)=>{if(i)len+=
 function reportLines(sel){
   const s=sel.s,b=s.b,L=sel.L,st=strokeStats(s),out=[];
   out.push(['h','המשיכה']);
-  out.push(['מברשת',s.bname||'—']);out.push(['צבע',s.erase?'מחק':s.color]);
+  out.push(['מברשת',s.bname||'—']);out.push(['צבע',s.erase?'מחק':s.smudge?'מריחה':s.color]);
   out.push(['שכבה',L.name+(L.opacity<1?' · '+Math.round(L.opacity*100)+'%':'')]);out.push(['רקע',bgColor||'רגיל']);
   out.push(['לחץ העט','מ-'+st.pmin+'% עד '+st.pmax+'%']);if(s.rawMax!=null)out.push(['לחץ גולמי מהעט','עד '+Math.round(s.rawMax*100)+'%'+(s.rawCoal!=null?' · ביניים עד '+Math.round(s.rawCoal*100)+'%':'')]);
   out.push(['כיול','לחץ מלא ב-'+Math.round(penMax*100)+'% · תחושה '+(penCurve>10?'רכה':penCurve<-10?'קשה':'רגילה')]);out.push(['אורך',st.len+'px · '+st.n+' נקודות']);
@@ -1510,7 +1563,7 @@ function reportLines(sel){
   });
   return out;}
 function reportJson(sel){const s=sel.s,b=cloneB(s.b);b.heads.forEach(h=>{if(h.tipData)h.tipData='[ציור]';});
-  return JSON.stringify({app:'מחברת עיפרון '+APP_BUILD,brush:s.bname||null,color:s.erase?'eraser':s.color,layer:{name:sel.L.name,opacity:sel.L.opacity},
+  return JSON.stringify({app:'מחברת עיפרון '+APP_BUILD,brush:s.bname||null,color:s.erase?'eraser':s.smudge?'smudge':s.color,layer:{name:sel.L.name,opacity:sel.L.opacity},
     background:bgColor||'default',stroke:{...strokeStats(s),rawMax:s.rawMax??null,rawCoal:s.rawCoal??null},pen:{fullPressureAt:penMax,feel:penCurve},settings:b},null,1);}
 function strokeBox(s){let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;s.pts.forEach(p=>{x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);});
   const h0=s.b.heads[0],pk=Math.max(...s.pts.map(p=>p.p)),pf=Math.max(h0.minSize/100,1-h0.pSize/100*(1-pk));
