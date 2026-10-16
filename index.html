@@ -520,11 +520,16 @@ function stamper(buf,b,seed,scale){
   // direction-following tips and offsets (that flipping caused spikes in tight turns)
   let sdx=0,sdy=0;const dirLen=Math.max(6,b.size*.6);
   // distance travelled along the stroke, in canvas pixels; a pixel revisited after more than this counts as a second pass
-  let sBase=0,sNow=0;const thr=(b.size*(1.15+2*b.scatter/100)+2)*scale;
+  // Measured with a point on a short leash behind the pen: it only moves when the pen really moves on,
+  // so hand tremor (tiny back-and-forth readings) doesn't add distance and make a stroke look like it doubled back.
+  let sNow=0,sA=0,ax=0,ay=0,started=false;const leash=Math.max(1,b.size*.2),thr=(b.size*(1.15+2*b.scatter/100)+2)*scale;
   const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true;
   const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
   const pf=p=>Math.max(b.minSize/100,1-b.pSize/100*(1-p));
   function stamp(x,y,p,az,dir,step){
+    if(!started){ax=x;ay=y;started=true;}
+    else{const lx=x-ax,ly=y-ay,ld=Math.hypot(lx,ly);if(ld>leash){const k=(ld-leash)/ld;ax+=lx*k;ay+=ly*k;sA+=ld-leash;}}
+    sNow=sA*scale;
     const sz=b.size*pf(p)*(1-b.sizeJitter/100*rng());
     const lvl=1-b.pOpacity/100*(1-p);
     const ang=baseAng+(b.angleSrc==='direction'?dir:(b.angleSrc==='tilt'&&az!=null?az:0))+(rng()-.5)*2*Math.PI*b.angleJitter/100;
@@ -544,15 +549,15 @@ function stamper(buf,b,seed,scale){
       const dx=q.x-a.x,dy=q.y-a.y,dist=Math.hypot(dx,dy);if(dist<.01)return;
       const k=sdx||sdy?Math.min(1,dist/dirLen):1;sdx=sdx*(1-k)+dx/dist*k;sdy=sdy*(1-k)+dy/dist*k;
       const dir=Math.atan2(sdy,sdx);let tt=0,carry=rem;
-      if(pending){sNow=sBase;stamp(pending.x,pending.y,pending.p,pending.az,dir,0);pending=null;}
+      if(pending){stamp(pending.x,pending.y,pending.p,pending.az,dir,0);pending=null;}
       while(true){
         const f0=tt/dist,p0=a.p+(q.p-a.p)*f0;
         const step=Math.max(.5,b.spacing/100*b.size*pf(p0)),need=step-carry;
         if(tt+need>dist){carry+=dist-tt;break;}
         tt+=need;carry=0;const f=tt/dist;
-        sNow=(sBase+tt)*scale;stamp(a.x+dx*f,a.y+dy*f,a.p+(q.p-a.p)*f,q.az,dir,step);
+        stamp(a.x+dx*f,a.y+dy*f,a.p+(q.p-a.p)*f,q.az,dir,step);
       }
-      rem=carry;sBase+=dist;
+      rem=carry;
     },
     finish(){if(pending){stamp(pending.x,pending.y,pending.p,pending.az,0,0);pending=null;}},
     take(){const d=dirty;dirty=null;return d;}
