@@ -175,6 +175,15 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 .cbtn.on{box-shadow:0 0 0 2px var(--dock),0 0 0 4px var(--accent)}
 #zoomPill{font-variant-numeric:tabular-nums}
 
+/* navigator */
+#nav{right:max(16px,env(safe-area-inset-right,0px));top:auto;bottom:calc(110px + env(safe-area-inset-bottom,0px));width:270px}
+.nv{padding:0 12px 12px;display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-width:0}
+#navCv{width:100%;max-width:100%;aspect-ratio:1.4;border-radius:10px;background:var(--desk);touch-action:none;cursor:move;display:block}
+.nv .ctl{grid-template-columns:52px minmax(0,1fr) 48px}
+.nv-row{display:flex;gap:4px}
+.nv-row button{flex:1;min-width:0;height:34px;padding:0;border:1px solid var(--line);font-size:12px;font-variant-numeric:tabular-nums}
+.nv .wide{height:36px;border:1px solid var(--line);font-size:13px}
+
 #toast{position:absolute;top:60px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);
   padding:8px 14px;border-radius:999px;font-size:14px;pointer-events:none;z-index:9}
 #saveBox{position:absolute;inset:0;background:rgb(0 0 0 / .55);display:grid;place-items:center;z-index:10;
@@ -194,7 +203,8 @@ input[type=range]{width:110px;accent-color:var(--accent)}
   <div class="top">
     <div class="side">
       <button class="pill on" id="lyToggle" aria-expanded="true">שכבות · <b id="lyName">שכבה 2</b></button>
-      <button class="pill" id="zoomPill" hidden title="חזרה לגודל רגיל">100%</button>
+      <button class="pill" id="navToggle" aria-expanded="false" title="ניווט: זום וסיבוב">ניווט</button>
+      <button class="pill" id="zoomPill" hidden title="חזרה לתצוגה רגילה">100%</button>
       <div class="pill" id="status">עט: <b id="penState">לא זוהה עדיין</b> · לחץ <b id="pr">–</b></div>
     </div>
     <div class="pill"><label><input type="checkbox" id="penOnly" checked> רק עט</label></div>
@@ -218,6 +228,24 @@ input[type=range]{width:110px;accent-color:var(--accent)}
         <button id="lyMerge">מזג למטה</button>
       </div>
     </footer>
+  </aside>
+
+  <aside id="nav" class="panel" aria-label="ניווט" hidden>
+    <header>
+      <span>ניווט</span>
+      <div class="grp"><button id="navClose" aria-label="סגור"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    </header>
+    <div class="nv">
+      <canvas id="navCv" aria-label="כל הקנבס – גרור כדי לזוז"></canvas>
+      <label class="ctl"><span>זום</span><input type="range" id="navZoom" min="-332" max="300" value="0"><output id="navZoomV">100%</output></label>
+      <label class="ctl"><span>סיבוב</span><input type="range" id="navRot" min="-180" max="180" value="0"><output id="navRotV">0°</output></label>
+      <div class="nv-row" dir="ltr">
+        <button id="navL90" title="סובב 90° שמאלה">↺90°</button><button id="navL" title="סובב 15° שמאלה">↺15°</button>
+        <button id="navRot0" title="ישר">0°</button>
+        <button id="navR" title="סובב 15° ימינה">15°↻</button><button id="navR90" title="סובב 90° ימינה">90°↻</button>
+      </div>
+      <button id="navReset" class="wide">איפוס תצוגה</button>
+    </div>
   </aside>
 
   <aside id="colors" class="panel" aria-label="צבעים" hidden>
@@ -671,12 +699,13 @@ function allowed(e){
   if(e.pointerType==='touch')return!(penOnly.checked&&penSeen);
   return true;
 }
-function raw(e){ // pen position in canvas pixels (undoing zoom and pan)
-  const r=stack.getBoundingClientRect();
+function raw(e){ // pen position in canvas pixels (undoing zoom, pan and rotation)
+  const w=wrapG.getBoundingClientRect(),c=toCanvas({x:e.clientX-w.left,y:e.clientY-w.top});
   let p=e.pointerType==='pen'?e.pressure:0.6, az=null;
   if(typeof e.azimuthAngle==='number'&&e.pointerType==='pen')az=e.azimuthAngle;
   else if(e.tiltX||e.tiltY)az=Math.atan2(e.tiltY,e.tiltX);
-  return{x:(e.clientX-r.left)/view.z,y:(e.clientY-r.top)/view.z,p,az};
+  if(az!=null)az-=view.r; // pen tilt measured against the canvas, not the screen
+  return{x:c.x,y:c.y,p,az};
 }
 function smooth(q){ // streamline: lag the point toward the pen. Pressure is also eased over a short distance,
   // because the pen's raw pressure flickers from reading to reading and makes the line swell like beads.
@@ -729,12 +758,26 @@ function end(e){
 stack.addEventListener('pointerup',end);stack.addEventListener('pointercancel',end);
 ['touchstart','touchmove','gesturestart'].forEach(t=>stack.addEventListener(t,e=>e.preventDefault(),{passive:false}));
 
-// =================== ZOOM & PAN ===================
-// Two fingers: pinch to zoom, drag to move. A quick two-finger tap undoes.
-// With "pen only" on (after the pen was seen), one finger also moves the canvas.
-const view={z:1,x:0,y:0},wrapG=$('wrap'),tp=new Map();let gest=null;
-function applyView(){stack.style.transform='translate('+view.x+'px,'+view.y+'px) scale('+view.z+')';
-  const zp=$('zoomPill');zp.textContent=Math.round(view.z*100)+'%';zp.hidden=Math.abs(view.z-1)<.01&&Math.abs(view.x)<1&&Math.abs(view.y)<1;}
+// =================== ZOOM, PAN & ROTATE ===================
+// Two fingers: pinch to zoom, drag to move, twist to rotate (it settles on 0°/90°/180°/270° when close).
+// A quick two-finger tap undoes. With "pen only" on (after the pen was seen), one finger also moves the canvas.
+// The view maps a canvas point c to the screen as  P = t + R(r)·(z·c).
+const view={z:1,x:0,y:0,r:0},wrapG=$('wrap'),tp=new Map();let gest=null;
+const rot=(x,y,a)=>{const c=Math.cos(a),s=Math.sin(a);return{x:x*c-y*s,y:x*s+y*c};};
+function toCanvas(P,v=view){const q=rot(P.x-v.x,P.y-v.y,-v.r);return{x:q.x/v.z,y:q.y/v.z};}
+function placeAt(c,P,z,r){const q=rot(c.x*z,c.y*z,r);view.x=P.x-q.x;view.y=P.y-q.y;view.z=z;view.r=r;}
+const normA=a=>{a%=Math.PI*2;if(a>Math.PI)a-=Math.PI*2;if(a<-Math.PI)a+=Math.PI*2;return a;};
+function applyView(){
+  stack.style.transform='translate('+view.x+'px,'+view.y+'px) rotate('+view.r+'rad) scale('+view.z+')';
+  const deg=Math.round(normA(view.r)*180/Math.PI),zp=$('zoomPill');
+  zp.textContent=Math.round(view.z*100)+'%'+(deg?' · '+deg+'°':'');
+  zp.hidden=Math.abs(view.z-1)<.01&&Math.abs(view.x)<1&&Math.abs(view.y)<1&&!deg;
+  navView();
+}
+const screenCenter=()=>({x:wrapG.clientWidth/2,y:wrapG.clientHeight/2});
+// zoom / rotate keeping the canvas point under P where it is
+function setView(z,r,P=screenCenter()){const c=toCanvas(P);placeAt(c,P,Math.min(8,Math.max(.1,z)),normA(r));applyView();}
+function resetView(){view.z=1;view.x=0;view.y=0;view.r=0;applyView();}
 const onCanvas=t=>t===wrapG||stack.contains(t);
 function cancelTouchStroke(){
   if(!cur||cur.ptype!=='touch')return;
@@ -744,14 +787,18 @@ function cancelTouchStroke(){
 function gPts(){return[...tp.values()];}
 function gStart(keep){const ps=gPts(),two=ps.length>1;
   const c=two?{x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2}:ps[0];
-  gest={c,d:two?Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y):0,z:view.z,x:view.x,y:view.y,n:ps.length,
-    t0:keep?keep.t0:Date.now(),moved:keep?keep.moved:false,max:Math.max(ps.length,keep?keep.max:0)};}
+  gest={c,cc:toCanvas(c),d:two?Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y):0,a:two?Math.atan2(ps[1].y-ps[0].y,ps[1].x-ps[0].x):0,
+    z:view.z,r:view.r,n:ps.length,t0:keep?keep.t0:Date.now(),moved:keep?keep.moved:false,max:Math.max(ps.length,keep?keep.max:0)};}
 function gMove(){const ps=gPts();if(ps.length!==gest.n){gStart(gest);return;}
   const two=ps.length>1,c=two?{x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2}:ps[0];
-  let z=gest.z;if(two&&gest.d>10)z=Math.min(8,Math.max(.2,gest.z*Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y)/gest.d));
-  const cx=(gest.c.x-gest.x)/gest.z,cy=(gest.c.y-gest.y)/gest.z;
-  view.z=z;view.x=c.x-cx*z;view.y=c.y-cy*z;
-  if(Math.hypot(c.x-gest.c.x,c.y-gest.c.y)>8||Math.abs(z/gest.z-1)>.05)gest.moved=true;
+  let z=gest.z,r=gest.r;
+  if(two&&gest.d>10){
+    z=Math.min(8,Math.max(.1,gest.z*Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y)/gest.d));
+    r=gest.r+normA(Math.atan2(ps[1].y-ps[0].y,ps[1].x-ps[0].x)-gest.a);
+    const q=Math.round(r/(Math.PI/2))*(Math.PI/2);if(Math.abs(r-q)<.07)r=q; // settle on right angles
+  }
+  placeAt(gest.cc,c,z,r);
+  if(Math.hypot(c.x-gest.c.x,c.y-gest.c.y)>8||Math.abs(z/gest.z-1)>.05||Math.abs(r-gest.r)>.06)gest.moved=true;
   applyView();
 }
 function wPos(e){const r=wrapG.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};}
@@ -778,17 +825,54 @@ wrapG.addEventListener('pointerup',gEnd,true);wrapG.addEventListener('pointercan
 ['touchstart','touchmove','gesturestart'].forEach(t=>wrapG.addEventListener(t,e=>{if(onCanvas(e.target))e.preventDefault();},{passive:false}));
 // trackpad / mouse wheel: pinch (ctrl+wheel) zooms around the pointer, scrolling moves
 wrapG.addEventListener('wheel',e=>{
-  if(!onCanvas(e.target))return;e.preventDefault();const p=wPos(e);
-  if(e.ctrlKey){const z=Math.min(8,Math.max(.2,view.z*Math.exp(-e.deltaY*.01)));
-    view.x=p.x-(p.x-view.x)*z/view.z;view.y=p.y-(p.y-view.y)*z/view.z;view.z=z;}
-  else{view.x-=e.deltaX;view.y-=e.deltaY;}
-  applyView();
+  if(!onCanvas(e.target))return;e.preventDefault();
+  if(e.ctrlKey)setView(view.z*Math.exp(-e.deltaY*.01),view.r,wPos(e));
+  else{view.x-=e.deltaX;view.y-=e.deltaY;applyView();}
 },{passive:false});
-$('zoomPill').onclick=()=>{view.z=1;view.x=0;view.y=0;applyView();};
+$('zoomPill').onclick=resetView;
+
+// =================== NAVIGATOR ===================
+// Floating panel: the whole canvas in small with a frame showing what's on screen (drag to move),
+// zoom and rotation sliders, quick-turn buttons and reset.
+const navCv=$('navCv'),navSnap=document.createElement('canvas');let navT=0;
+function navLayout(){const r=navCv.getBoundingClientRect(),s=window.devicePixelRatio||1;
+  if(navCv.width!==Math.round(r.width*s)){navCv.width=Math.round(r.width*s);navCv.height=Math.round(r.height*s);}return{W:navCv.width,H:navCv.height};}
+function navFit(){const{W,H}=navLayout(),cw=stack.clientWidth,ch=stack.clientHeight,k=Math.min(W/cw,H/ch)*.92;return{k,ox:(W-cw*k)/2,oy:(H-ch*k)/2,W,H};}
+function navRefresh(){ // re-render the small picture of the drawing (throttled)
+  if($('nav').hidden)return;clearTimeout(navT);navT=setTimeout(()=>{
+    const f=navFit(),cw=stack.clientWidth,ch=stack.clientHeight;navSnap.width=Math.max(1,Math.round(cw*f.k));navSnap.height=Math.max(1,Math.round(ch*f.k));
+    const x=navSnap.getContext('2d');x.fillStyle=getComputedStyle(stack).backgroundColor;x.fillRect(0,0,navSnap.width,navSnap.height);
+    layers.forEach(L=>{if(L.visible){x.globalAlpha=L.opacity;x.drawImage(L.canvas,0,0,navSnap.width,navSnap.height);}});x.globalAlpha=1;
+    navView();},60);}
+function navView(){ // redraw picture + the frame of the visible area
+  if($('nav').hidden)return;const f=navFit(),x=navCv.getContext('2d');
+  x.clearRect(0,0,f.W,f.H);x.drawImage(navSnap,f.ox,f.oy);
+  const ww=wrapG.clientWidth,wh=wrapG.clientHeight,pts=[[0,0],[ww,0],[ww,wh],[0,wh]].map(([px,py])=>toCanvas({x:px,y:py}));
+  x.beginPath();pts.forEach((p,i)=>{const X=f.ox+p.x*f.k,Y=f.oy+p.y*f.k;i?x.lineTo(X,Y):x.moveTo(X,Y);});x.closePath();
+  x.fillStyle='rgba(47,111,222,.12)';x.fill();x.lineWidth=2*(window.devicePixelRatio||1);x.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()||'#2f6fde';x.stroke();
+  const zs=$('navZoom'),rs=$('navRot');zs.value=Math.round(Math.log2(view.z)*100);$('navZoomV').textContent=Math.round(view.z*100)+'%';
+  const deg=Math.round(normA(view.r)*180/Math.PI);rs.value=deg;$('navRotV').textContent=deg+'°';
+}
+let navId=null;
+const navGo=e=>{const r=navCv.getBoundingClientRect(),f=navFit(),s=f.W/r.width;
+  const c={x:((e.clientX-r.left)*s-f.ox)/f.k,y:((e.clientY-r.top)*s-f.oy)/f.k};placeAt(c,screenCenter(),view.z,view.r);applyView();};
+navCv.addEventListener('pointerdown',e=>{navId=e.pointerId;navCv.setPointerCapture(navId);navGo(e);});
+navCv.addEventListener('pointermove',e=>{if(e.pointerId===navId)navGo(e);});
+const navUp=e=>{if(e.pointerId===navId)navId=null;};navCv.addEventListener('pointerup',navUp);navCv.addEventListener('pointercancel',navUp);
+$('navZoom').oninput=e=>setView(Math.pow(2,e.target.value/100),view.r);
+$('navRot').oninput=e=>{let d=+e.target.value;const q=Math.round(d/90)*90;if(Math.abs(d-q)<4)d=q;setView(view.z,d*Math.PI/180);};
+$('navL').onclick=()=>setView(view.z,view.r-Math.PI/12);$('navR').onclick=()=>setView(view.z,view.r+Math.PI/12);
+$('navL90').onclick=()=>setView(view.z,Math.round((view.r-Math.PI/2)/(Math.PI/2))*(Math.PI/2));
+$('navR90').onclick=()=>setView(view.z,Math.round((view.r+Math.PI/2)/(Math.PI/2))*(Math.PI/2));
+$('navRot0').onclick=()=>setView(view.z,0);
+$('navReset').onclick=resetView;
+$('navToggle').onclick=()=>{const p=$('nav'),open=p.hidden;setPanel(p,$('navToggle'),open);if(open){navRefresh();requestAnimationFrame(navView);}};
+$('navClose').onclick=()=>setPanel($('nav'),$('navToggle'),false);
+window.addEventListener('resize',()=>{navRefresh();});
 
 // =================== LAYERS PANEL ===================
 const list=$('lyList');
-function updThumb(L){if(!L.thumb)return;const t=L.thumb,c=t.getContext('2d');c.clearRect(0,0,t.width,t.height);
+function updThumb(L){navRefresh();if(!L.thumb)return;const t=L.thumb,c=t.getContext('2d');c.clearRect(0,0,t.width,t.height);
   if(L.canvas.width)c.drawImage(L.canvas,0,0,t.width,t.height);}
 function renderLayers(){
   list.innerHTML='';
@@ -1232,6 +1316,7 @@ makeMovable($('layers'),$('layers').querySelector('header'));
 makeMovable($('brushes'),$('brushes').querySelector('header'));
 makeMovable(dockEl,$('dockGrip'));
 makeMovable($('colors'),$('colors').querySelector('header'));
+makeMovable($('nav'),$('nav').querySelector('header'));
 function placeAll(){for(const id in placements){const el=$(id);if(el&&!el.hidden)placeEl(el,placements[id]);}}
 window.addEventListener('resize',placeAll);
 // panels that were hidden get placed when they open
