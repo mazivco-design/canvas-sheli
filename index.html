@@ -241,6 +241,8 @@ input[type=range]{width:110px;accent-color:var(--accent)}
       <div class="grp"><button id="brClose" aria-label="סגור"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     </header>
     <div class="scroll">
+      <div class="segrow" id="eraserRow" hidden><span>המחק</span><div class="seg" id="eraserMode">
+        <button data-v="own" class="on">מחק משלו</button><button data-v="same">כמו המברשת</button></div></div>
       <div class="lib" id="lib"></div>
       <div class="pvrow">
         <canvas id="tipView" aria-label="ראש המברשת – נגיעה אחת"></canvas>
@@ -911,13 +913,14 @@ function syncCtls(){
   renderHeads();
   $('size').value=B.size;
   const src=allBrushes().find(x=>x.id===bid);
-  $('brushName2').innerHTML=(src?src.name:'מברשת')+(modified?' <em>· שונתה</em>':'');
-  $('brushName').textContent=src?src.name:'מברשת';
+  $('brushName2').innerHTML=(erasing?'מחק · ':'')+(src?src.name:'מברשת')+(modified?' <em>· שונתה</em>':'');
+  if(!erasing||eraseLinked)$('brushName').textContent=src?src.name:'מברשת';
+  $('eraserRow').hidden=!erasing;$('eraserMode').querySelectorAll('button').forEach(b=>b.classList.toggle('on',(b.dataset.v==='same')===eraseLinked));
   $('brReset').hidden=!modified;$('brUpdate').hidden=!(modified&&bid.startsWith('c'));
   updDot();
 }
 let prevT;
-function changed(k){modified=true;syncCtls();clearTimeout(prevT);prevT=setTimeout(drawPreview,k==='size'?60:20);}
+function changed(k){modified=true;if(erasing&&!eraseLinked)persistEraser();syncCtls();clearTimeout(prevT);prevT=setTimeout(drawPreview,k==='size'?60:20);}
 function selectBrush(id){const src=allBrushes().find(x=>x.id===id);if(!src)return;
   B=norm(src);bid=id;curHead=0;modified=false;syncCtls();drawPreview();renderLib();}
 function demo(w,h,b,cap){
@@ -1072,8 +1075,31 @@ $('brClose').onclick=()=>setPanel($('brushes'),$('brushBtn'),false);
 let tt;function toast(m){const t=$('toast');t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,2200);}
 
 // =================== DOCK ===================
-function setErase(on){erasing=on;$('tEraser').classList.toggle('on',on);updDot();drawPreview();if($('colorBtn'))updColorBtn();}
-$('tEraser').onclick=()=>setErase(!erasing);
+// The eraser has its own brush (a basic round one to start), edited in the same panel while erasing,
+// unless "like the brush" is chosen — then it erases with exactly the brush you draw with.
+let drawState=null,eraseLinked=false,eraseState={B:norm({...PRESETS[0],size:30}),bid:'round',modified:false,curHead:0};
+try{const e=JSON.parse(localStorage.getItem('pencil-eraser')||'null');if(e){eraseLinked=!!e.linked;if(e.B)eraseState={B:norm(e.B),bid:e.bid||'',modified:!!e.modified,curHead:0};}}catch(_){}
+function persistEraser(){const st=erasing&&!eraseLinked?{B,bid,modified}:eraseState;
+  try{localStorage.setItem('pencil-eraser',JSON.stringify({linked:eraseLinked,B:st.B,bid:st.bid,modified:st.modified}));}catch(_){}}
+const grabState=()=>({B,bid,modified,curHead});
+function useState(st){B=st.B;bid=st.bid;modified=st.modified;curHead=st.curHead||0;}
+function setErase(on){
+  if(on!==erasing&&!eraseLinked){
+    if(on){drawState=grabState();useState(eraseState);}
+    else{eraseState=grabState();persistEraser();if(drawState)useState(drawState);}
+  }
+  erasing=on;$('tEraser').classList.toggle('on',on);
+  syncCtls();renderLib();updDot();drawPreview();if($('colorBtn'))updColorBtn();
+}
+$('tEraser').onclick=()=>{
+  if(!erasing){setErase(true);return;}
+  togglePanel($('brushes'),$('brushBtn'),$('layers'),$('lyToggle')); // second tap: open the eraser's settings
+};
+$('eraserMode').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+  const linked=b.dataset.v==='same';if(linked===eraseLinked)return;
+  if(erasing){if(linked){eraseState=grabState();useState(drawState||grabState());}else{drawState=grabState();useState(eraseState);}}
+  eraseLinked=linked;persistEraser();syncCtls();renderLib();updDot();drawPreview();
+});
 const swBox=$('swatches');
 function selColor(c,btn){color=c;swBox.querySelectorAll('.sw').forEach(s=>s.classList.toggle('on',s===btn));setErase(false);updDot();drawPreview();updColorBtn();
   if(!$('colors').hidden&&coTarget==='brush'){hsv=hex2hsv(c);drawPicker();}}
