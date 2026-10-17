@@ -115,7 +115,9 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 .bt .x.armed{color:#fff;background:#e5484d}
 .sec{font-size:12px;letter-spacing:.06em;color:var(--muted);font-weight:500;margin-top:4px;display:flex;align-items:center;gap:8px}
 .sec::after{content:"";flex:1;height:1px;background:var(--line)}
-.pvrow{display:flex;gap:8px}
+.pvrow{display:flex;gap:8px;position:sticky;top:0;z-index:2;background:var(--dock);padding:4px 0 6px;margin:0 -2px;align-items:stretch}
+#pvFold{all:unset;box-sizing:border-box;width:22px;flex:none;display:grid;place-items:center;color:var(--muted);cursor:pointer;font-size:14px;border-radius:8px}
+.pvrow.fold #prev,.pvrow.fold #tipView{height:34px}.pvrow.fold #tipView{width:34px}.pvrow.fold #pvFold{transform:rotate(-90deg)}
 #prev,#tipView{height:96px;border-radius:12px;border:1px solid var(--line);
   background:repeating-conic-gradient(var(--check) 0 25%,var(--paper) 0 50%) 0 0/12px 12px}
 #prev{flex:1;min-width:0;width:100%}
@@ -123,7 +125,9 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 .ctl{display:grid;grid-template-columns:124px minmax(0,1fr) 44px;align-items:center;gap:8px;font-size:13px}
 .ctl input[type=range]{width:100%}
 .ctl.dis,.segrow.dis{opacity:.35;pointer-events:none}
-.pfw{display:grid;gap:4px}.pfw canvas{width:100%;height:120px;display:block;direction:ltr;touch-action:none}.pfh{display:flex;align-items:center;justify-content:space-between;font-size:13px;min-height:30px}.pfh button{height:30px;font-size:12px}
+.pfw{display:grid;gap:4px}.pfl{display:flex;gap:6px;flex-wrap:wrap}.pfc{position:relative;padding:3px 4px;height:36px;border:1px solid var(--line);border-radius:8px}.pfw .pfc canvas{width:44px;height:28px;display:block}
+.pfc .hx{position:absolute;top:-6px;left:-6px;width:18px;height:18px;border-radius:50%;background:var(--dock);border:1px solid var(--line);font-size:10px;display:grid;place-items:center;color:var(--muted)}
+.pfh .grp{display:flex;gap:6px}.pfw>canvas{width:100%;height:120px;display:block;direction:ltr;touch-action:none}.pfh{display:flex;align-items:center;justify-content:space-between;font-size:13px;min-height:30px}.pfh button{height:30px;font-size:12px}
 .pgw{display:grid;gap:4px}.pgw canvas{width:100%;height:96px;display:block;direction:ltr}
 .pgl{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)}.pgl i{font-style:normal;display:flex;align-items:center;gap:4px}
 .pgl i::before{content:'';width:12px;height:3px;border-radius:2px;background:var(--c)}
@@ -342,7 +346,7 @@ input[type=range]{width:110px;accent-color:var(--accent)}
       <div class="segrow" id="eraserRow" hidden><span>המחק</span><div class="seg" id="eraserMode">
         <button data-v="own" class="on">מחק משלו</button><button data-v="same">כמו המברשת</button></div></div>
       <div class="lib" id="lib"></div>
-      <div class="pvrow">
+      <div class="pvrow" id="pvrow"><button type="button" id="pvFold" aria-label="קפל את התצוגה המקדימה" title="קפל / פתח">▾</button>
         <canvas id="tipView" aria-label="ראש המברשת – נגיעה אחת"></canvas>
         <canvas id="prev" aria-label="תצוגה מקדימה של המברשת"></canvas>
       </div>
@@ -629,7 +633,9 @@ function composite(bufs,r,s,target,base){
       // along the stroke as its dab. Lower flow lets the dabs build up on each other instead (Photoshop's flow).
       const mm=Ms[hh][k],ff=Fs[hh][k],g1=mm+(ff>mm?(ff-mm)*bld[hh]:0),m2=M2s[hh][k],f2=F2s[hh][k],g2=m2+(f2>m2?(f2-m2)*bld[hh]:0);
       let c1=g1>1e-4?Math.min(1,(1-Math.exp(-g1))/.9975)*str[hh]:0;let cs=c1,c2=0;
-      if(g2>1e-4){rev=true;cs=Math.min(1,(1-Math.exp(-(g1+g2)))/.9975)*str[hh];c2=Math.min(1,(1-Math.exp(-g2))/.9975)*str[hh];}
+      // where the stroke came back over itself: cs is the "no darkening" result (the darker of the two passes;
+      // summing their ink was the same as glazing, so overlap 0 used to do nothing at opacity 100)
+      if(g2>1e-4){rev=true;c2=Math.min(1,(1-Math.exp(-g2))/.9975)*str[hh];cs=Math.max(c1,c2);}
       if(Os[hh]){let o1=Os[hh][k],o2=O2s[hh][k];const jv=OJs[hh]?OJs[hh][k]:-1;if(jv>=0){if(o1>=0)o1*=jv;if(o2>=0)o2*=jv;}
         const l1=o1<0?(o2<0?1:o2):o1,l2=o2<0?l1:o2;c1*=l1;c2*=l2;cs*=Math.max(l1,l2);}
       if(hh===0){a1=c1;as=cs;a2=c2;cr=c[0];cg=c[1];cb=c[2];continue;}
@@ -951,7 +957,7 @@ let held=[];
 function beginStroke(){startPending=false;const p=cur.pts[0];
   if(held.length){const pm=Math.min(p.p,...held.map(h=>h.p));p.p=pm;held.forEach(h=>h.p=pm);}
   st.forEach(t=>t.first(p));fd.push(p);held.forEach(q=>{cur.pts.push(q);fd.push(q);});held=[];}
-function liveUpdate(){let r=null;st.forEach(t=>r=uni(r,t.take()));if(cur.smudge){st[0].put(r);return;}composite(cur.bufs,r,cur,active.ctx,snapX);}
+function liveUpdate(){const t=performance.now();let r=null;st.forEach(t=>r=uni(r,t.take()));if(cur.smudge)st[0].put(r);else composite(cur.bufs,r,cur,active.ctx,snapX);cur.msDraw=(cur.msDraw||0)+(performance.now()-t);}
 // is a panel, the dock or any control on top of the canvas at this point? (then the pen is aimed at it, not at the drawing)
 function overUI(e){const t=document.elementFromPoint(e.clientX,e.clientY);return!!(t&&t!==stack&&!stack.contains(t)&&t.closest('.panel,.dock,button,input,label,header,#status,.pill'));}
 stack.addEventListener('pointerdown',e=>{
@@ -961,10 +967,12 @@ stack.addEventListener('pointerdown',e=>{
   e.preventDefault();
   if(!active.visible){toast('השכבה מוסתרת – הפעל את העין כדי לצייר');return;}
   activeId=e.pointerId;try{stack.setPointerCapture(e.pointerId);}catch(_){}
+  const t0=performance.now();
   const p=raw(e);lastRaw=p;
   cur={b:cloneB(effB()),color,erase:erasing,smudge:smudging||undefined,seed:(Math.random()*2**31)|0,pts:[p]};
   {const src=allBrushes().find(x=>x.id===bid);cur.bname=(src?src.name:'מברשת')+(modified?' (שונתה)':'')+(solo?' · בידוד: '+labelOf(solo):'');}
   Object.defineProperty(cur,'ptype',{value:e.pointerType,enumerable:false});
+  Object.defineProperty(cur,'t0',{value:t0,enumerable:false,writable:true});Object.defineProperty(cur,'msDraw',{value:0,enumerable:false,writable:true});
   const bufs=bufsFor(cur.b.heads.length);bufs.forEach(resetBuf);
   snapX.setTransform(1,0,0,1,0,0);snapX.globalAlpha=1;snapX.globalCompositeOperation='copy';snapX.drawImage(active.canvas,0,0);snapX.globalCompositeOperation='source-over';
   st=cur.smudge?[smudger(active.ctx,cur,dpr)]:cur.b.heads.map((h,i)=>stamper(bufs[i],headBrush(cur.b,i),cur.seed+i*7919,dpr));
@@ -998,6 +1006,7 @@ function end(e){
   if(cur.b.smoothing>0&&lastRaw&&cur.pts.length>1){const q={...lastRaw,p:cur.pts[cur.pts.length-1].p};cur.pts.push(q);fd.push(q);}
   if(startPending)beginStroke(); // a tap with no movement: a dot at the touch-down pressure
   fd.end();st.forEach(t=>t.finish());liveUpdate();
+  if(cur.t0){cur.msTotal=Math.round(performance.now()-cur.t0);cur.msDraw=Math.round(cur.msDraw||0);}
   if(hasTaper(cur.b)){ // now the length is known: draw it again with the end narrowing to a point
     const c=active.ctx;c.save();c.setTransform(1,0,0,1,0,0);c.globalAlpha=1;c.globalCompositeOperation='copy';c.drawImage(snap,0,0);c.restore();
     renderStroke(c,cur,dpr,cur.bufs);}
@@ -1249,6 +1258,11 @@ function soloBtn(row,k){if(NO_SOLO.includes(k))return;const sp=row.querySelector
   bt.className='solo';bt.type='button';bt.setAttribute('aria-label','לצייר רק עם '+sp.textContent);bt.title='בידוד: לצייר רק עם הפרמטר הזה';
   bt.onclick=e=>{e.preventDefault();e.stopPropagation();setSolo(k);};sp.prepend(bt);}
 $('soloOff').onclick=()=>setSolo(solo);
+// the preview strip stays at the top while the controls scroll; a tap folds it to a thin strip
+let pvFolded=false;try{pvFolded=localStorage.getItem('pencil-pvfold')==='1';}catch(_){}
+function applyFold(){$('pvrow').classList.toggle('fold',pvFolded);drawPreview();}
+$('pvFold').onclick=()=>{pvFolded=!pvFolded;try{localStorage.setItem('pencil-pvfold',pvFolded?'1':'0');}catch(_){}applyFold();};
+if(pvFolded)$('pvrow').classList.add('fold');
 // ---- profile editor: the head's alpha from centre to rim, with draggable points ----
 let pfCv=null;
 function curProfile(h){return h.profile||profFromSoft(h.softness,h.falloff||'smooth');}
@@ -1265,7 +1279,22 @@ function drawProfile(){
   x.strokeStyle=own?'#a855f7':ink;x.lineWidth=2;x.beginPath();for(let i=0;i<=60;i++){const t=i/60;i?x.lineTo(X(t),Y(profEval(P,t))):x.moveTo(X(t),Y(profEval(P,t)));}x.stroke();
   P.forEach((v,i)=>{const t=i/(PROF_N-1);x.beginPath();x.arc(X(t),Y(v),6,0,7);x.fillStyle=css.getPropertyValue('--dock')||'#fff';x.fill();x.lineWidth=2;x.strokeStyle=own?'#a855f7':ink;x.stroke();});
   x.fillStyle=css.getPropertyValue('--muted')||ink;x.font='10px system-ui';x.textBaseline='bottom';x.textAlign='left';x.fillText('מרכז',pad+3,H-pad-2);x.textAlign='right';x.fillText('שפה',W-pad-3,H-pad-2);
-  const rb=$('pfReset');if(rb)rb.hidden=!own;
+  const rb=$('pfReset');if(rb)rb.hidden=!own;const sb=$('pfSave');if(sb)sb.hidden=!own;
+}
+// saved profiles: kept on the device, separate from the brushes, so one profile can serve several brushes
+let profLib=[];try{profLib=JSON.parse(localStorage.getItem('pencil-profiles')||'[]');}catch(_){profLib=[];}
+function setupProfileLib(saveBtn,list){
+  const persist=()=>{try{localStorage.setItem('pencil-profiles',JSON.stringify(profLib));}catch(_){}};
+  const render=()=>{list.innerHTML='';const s=window.devicePixelRatio||1,css=getComputedStyle(document.body);
+    profLib.forEach((P,i)=>{const b=document.createElement('button');b.type='button';b.className='pfc';b.title='החל פרופיל';
+      const cv=document.createElement('canvas');cv.width=Math.round(44*s);cv.height=Math.round(28*s);const x=cv.getContext('2d');x.scale(s,s);
+      x.beginPath();x.moveTo(2,26);for(let k=0;k<=20;k++){const t=k/20;x.lineTo(2+t*40,26-profEval(P,t)*24);}x.lineTo(42,26);x.closePath();x.fillStyle='#a855f7';x.globalAlpha=.25;x.fill();x.globalAlpha=1;x.strokeStyle='#a855f7';x.lineWidth=1.5;x.stroke();
+      const xb=document.createElement('span');xb.className='hx';xb.textContent='✕';xb.setAttribute('role','button');xb.setAttribute('aria-label','מחק פרופיל');
+      let armed=false;xb.onclick=e=>{e.stopPropagation();if(!armed){armed=true;xb.textContent='?';setTimeout(()=>{armed=false;xb.textContent='✕';},2500);return;}profLib.splice(i,1);persist();render();};
+      b.append(cv,xb);b.onclick=()=>{B.heads[curHead].profile=P.slice();changed();};list.appendChild(b);});
+    list.hidden=!profLib.length;};
+  saveBtn.onclick=()=>{const P=B.heads[curHead].profile;if(!P)return;profLib.push(P.map(v=>Math.round(v*1000)/1000));persist();render();toast('הפרופיל נשמר');};
+  render();
 }
 function setupProfile(cv,resetBtn){
   pfCv=cv;let id=null,pi=-1;
@@ -1291,8 +1320,8 @@ SPEC.forEach(([k,label,a,b2,unit,sc])=>{
     w.innerHTML='<canvas id="pGraph" aria-label="גרף התגובה ללחץ"></canvas><div class="pgl"><i style="--c:#2f6fde">גודל</i><i style="--c:#e5484d">שקיפות</i><i style="--c:#30a46c">זרימה</i><i style="--c:#a855f7">רכות</i></div>';
     place(w);return;}
   if(k==='profile'){const w=document.createElement('div');w.className='pfw';
-    w.innerHTML='<div class="pfh"><span>שקיפות מהמרכז החוצה</span><button type="button" id="pfReset" hidden>חזרה לרכות</button></div><canvas id="pfCv" aria-label="פרופיל השקיפות של הראש, מהמרכז לשפה"></canvas><p class="hint2">גרור את הנקודות. שמאל = מרכז המברשת, ימין = השפה.</p>';
-    place(w);setupProfile(w.querySelector('#pfCv'),w.querySelector('#pfReset'));return;}
+    w.innerHTML='<div class="pfh"><span>שקיפות מהמרכז החוצה</span><span class="grp"><button type="button" id="pfSave" hidden>שמור פרופיל</button><button type="button" id="pfReset" hidden>חזרה לרכות</button></span></div><canvas id="pfCv" aria-label="פרופיל השקיפות של הראש, מהמרכז לשפה"></canvas><p class="hint2">גרור את הנקודות. שמאל = מרכז המברשת, ימין = השפה.</p><div class="pfl" id="pfList"></div>';
+    place(w);setupProfile(w.querySelector('#pfCv'),w.querySelector('#pfReset'));setupProfileLib(w.querySelector('#pfSave'),w.querySelector('#pfList'));return;}
   if(k==='pHint'){const p=document.createElement('p');p.className='hint2';
     p.textContent='עקומה: פלוס — מגיב כבר בנגיעה קלה · מינוס — צריך ללחוץ חזק. רכות: פלוס — נגיעה קלה רכה יותר · מינוס — לחיצה חזקה רכה יותר.';place(p);return;}
   if(k==='modeHint'){const p=document.createElement('p');p.className='hint2';p.id='modeHint';place(p);return;}
@@ -1390,9 +1419,11 @@ function drawTipView(col){ // one dab of every head, large, so the feather and t
 }
 // what each pressure link does to the current head, from a light touch to full pressure
 let pgLive=null;
+let pgReq=false;
 function drawPGraph(){
   const cv=$('pGraph');if(!cv)return;const r=cv.getBoundingClientRect();if(!r.width)return;const s=window.devicePixelRatio||1;
-  cv.width=Math.round(r.width*s);cv.height=Math.round(r.height*s);const x=cv.getContext('2d'),W=r.width,H=r.height,pad=6;x.scale(s,s);
+  const cw=Math.round(r.width*s),ch=Math.round(r.height*s);if(cv.width!==cw||cv.height!==ch){cv.width=cw;cv.height=ch;} // resizing a canvas is slow; only when needed
+  const x=cv.getContext('2d'),W=r.width,H=r.height,pad=6;x.setTransform(s,0,0,s,0,0);
   const css=getComputedStyle(document.body),ink=css.color;x.clearRect(0,0,W,H);
   x.strokeStyle=ink;x.globalAlpha=.15;x.lineWidth=1;x.strokeRect(pad+.5,pad+.5,W-2*pad-1,H-2*pad-1);
   for(let i=1;i<4;i++){const gx=pad+(W-2*pad)*i/4;x.beginPath();x.moveTo(gx,pad);x.lineTo(gx,H-pad);x.stroke();}
@@ -1665,7 +1696,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-17h';
+const APP_BUILD='2026-10-17i';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1690,6 +1721,7 @@ function reportLines(sel){
   out.push(['שכבה',L.name+(L.opacity<1?' · '+Math.round(L.opacity*100)+'%':'')]);out.push(['רקע',bgColor||'רגיל']);
   out.push(['לחץ העט','מ-'+st.pmin+'% עד '+st.pmax+'%']);if(s.rawMax!=null)out.push(['לחץ גולמי מהעט','עד '+Math.round(s.rawMax*100)+'%'+(s.rawCoal!=null?' · ביניים עד '+Math.round(s.rawCoal*100)+'%':'')]);
   out.push(['כיול','לחץ מלא ב-'+Math.round(penMax*100)+'% · תחושה '+(penCurve>10?'רכה':penCurve<-10?'קשה':'רגילה')]);out.push(['אורך',st.len+'px · '+st.n+' נקודות']);
+  if(s.msTotal!=null)out.push(['זמן','ציור '+s.msDraw+'ms מתוך '+s.msTotal+'ms']);
   out.push(['h','המברשת כולה']);
   ['size','opacity','overlap','smoothing','cross'].forEach(k=>out.push([labelOf(k),fmtVal(k,b[k])]));
   if(b.cross&&b.cross!=='off'){out.push([labelOf('gap'),fmtVal('gap',b.gap)]);out.push([labelOf('shadow'),fmtVal('shadow',b.shadow??0)]);}
@@ -1701,7 +1733,7 @@ function reportLines(sel){
   return out;}
 function reportJson(sel){const s=sel.s,b=cloneB(s.b);b.heads.forEach(h=>{if(h.tipData)h.tipData='[ציור]';});
   return JSON.stringify({app:'מחברת עיפרון '+APP_BUILD,brush:s.bname||null,color:s.erase?'eraser':s.smudge?'smudge':s.color,layer:{name:sel.L.name,opacity:sel.L.opacity},
-    background:bgColor||'default',stroke:{...strokeStats(s),rawMax:s.rawMax??null,rawCoal:s.rawCoal??null},pen:{fullPressureAt:penMax,feel:penCurve},settings:b},null,1);}
+    background:bgColor||'default',stroke:{...strokeStats(s),rawMax:s.rawMax??null,rawCoal:s.rawCoal??null,msDraw:s.msDraw??null,msTotal:s.msTotal??null},pen:{fullPressureAt:penMax,feel:penCurve},settings:b},null,1);}
 function strokeBox(s){let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;s.pts.forEach(p=>{x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);});
   const h0=s.b.heads[0],pk=Math.max(...s.pts.map(p=>p.p)),pf=Math.max(h0.minSize/100,1-h0.pSize/100*(1-pk));
   const m=s.b.size*Math.max(...s.b.heads.map(h=>h.scale/100*pf+Math.hypot(h.offX||0,h.offY||0)/100))/2+12;return{x0:x0-m,y0:y0-m,x1:x1+m,y1:y1+m};}
@@ -1838,7 +1870,7 @@ function mapPressure(raw){const n=Math.min(1,Math.max(0,raw/penMax));return Math
 function syncPen(){$('penMax').value=Math.round(penMax*100);$('penMaxV').textContent=Math.round(penMax*100)+'%';
   $('penCurve').value=penCurve;$('penCurveV').textContent=penCurve>10?'רכה':penCurve<-10?'קשה':'רגיל';}
 function showPressure(raw){const out=mapPressure(raw);
-  if(!$('brushes').hidden){pgLive=out;drawPGraph();}
+  if(!$('brushes').hidden){pgLive=out;if(!pgReq){pgReq=true;requestAnimationFrame(()=>{pgReq=false;drawPGraph();});}}
   $('pr').textContent=Math.round(out*100)+'%';
   if(!$('penPanel').hidden){$('pnRaw').style.width=raw*100+'%';$('pnRawV').textContent=Math.round(raw*100)+'%';
     $('pnOut').style.width=out*100+'%';$('pnOutV').textContent=Math.round(out*100)+'%';}}
