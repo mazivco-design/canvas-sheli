@@ -1651,8 +1651,10 @@ function buildReport(sel){
   // close-up of the stroke
   const bx=strokeBox(sel.s),bw=bx.x1-bx.x0,bh=bx.y1-bx.y0,cropW=PW-40,cropH=Math.min(520,cropW*bh/bw);
   const kC=Math.min(cropW/bw,cropH/bh);
-  // text height: header rows take a full row, the rest go two per row
-  let rows=0,col=0;lines.forEach(l=>{if(l[0]==='h'){rows+=(col?1:0)+1.4;col=0;}else{col++;if(col===colN){rows++;col=0;}}});if(col)rows++;
+  // text height: header rows and entries too long for a column take a full row, the rest go two per row
+  const mc=document.createElement('canvas').getContext('2d');
+  const isWide=l=>{mc.font='500 '+FS+'px system-ui,-apple-system,sans-serif';const lw=mc.measureText(l[0]+': ').width;mc.font='600 '+FS+'px system-ui,-apple-system,sans-serif';return lw+mc.measureText(String(l[1])).width>colW-16;};
+  let rows=0,col=0;lines.forEach(l=>{if(l[0]==='h'){rows+=(col?1:0)+1.4;col=0;}else if(isWide(l)){rows+=(col?1:0)+1;col=0;}else{col++;if(col===colN){rows++;col=0;}}});if(col)rows++;
   const PH=40+bh*kC+30+rows*LH+60,LW=1180,kL=Math.min(LW/cw,1400/ch),LH2=ch*kL,H=Math.max(PH,LH2+80),W=LW+PW+60;
   const out=document.createElement('canvas');out.width=W;out.height=Math.ceil(H);const o=out.getContext('2d');
   o.fillStyle='#f4f3ef';o.fillRect(0,0,W,out.height);
