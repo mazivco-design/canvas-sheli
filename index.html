@@ -741,7 +741,7 @@ function stamper(buf,b,seed,scale){
     // The level follows a rise quickly (a quarter brush width) but a drop slowly (three brush widths): where the
     // pen slows, turns or lifts, the pressure falls over a short distance, and without this the lighter dabs
     // painted pale discs over what a firmer dab had just laid.
-    if(capOn){if(lvS==null)lvS=lvl;else{const kk=1-Math.exp(-(step||0)/Math.max(1,b.size*(lvl>lvS?.25:3)));lvS+=(lvl-lvS)*kk;}buf.oj=lvS;lvl=1;}
+    if(capOn){if(lvS==null)lvS=lvl;else{const kk=1-Math.exp(-(step||0)/Math.max(1,b.size*(lvl>lvS||sP<b.size?.25:3)));lvS+=(lvl-lvS)*kk;}buf.oj=lvS;lvl=1;}  // (within the first brush width a drop is followed quickly too, so a high touch-down reading fades at once)
     const ang=baseAng+(b.angleSrc==='direction'?dir:(b.angleSrc==='tilt'&&az!=null?az:0))+(rng()-.5)*2*Math.PI*b.angleJitter/100;
     if(b.offX||b.offY){let ox=b.offX/100*b.master,oy=b.offY/100*b.master;
       if(b.offRel==='direction'){const c=Math.cos(dir),sn=Math.sin(dir);[ox,oy]=[ox*c-oy*sn,ox*sn+oy*c];}x+=ox;y+=oy;}
@@ -921,7 +921,14 @@ function feeder(emit){const P=[];
     end(){const n=P.length;if(n>=2)segment(P[n-3]||P[n-2],P[n-2],P[n-1],P[n-1]);}};
 }
 let startPending=false;
-function beginStroke(){startPending=false;const p=cur.pts[0];st.forEach(t=>t.first(p));fd.push(p);}
+// The pen's touch-down pressure (and often the first reading or two after it) is higher than what follows,
+// which left a dark, fat dot at the start of light strokes. So a pen stroke is held back until the pen has
+// moved about half a brush width (a few px at most); the points gathered meanwhile all start from the lightest
+// pressure seen in that stretch. A tap with no movement still leaves a dot at its own pressure.
+let held=[];
+function beginStroke(){startPending=false;const p=cur.pts[0];
+  if(held.length){const pm=Math.min(p.p,...held.map(h=>h.p));p.p=pm;held.forEach(h=>h.p=pm);}
+  st.forEach(t=>t.first(p));fd.push(p);held.forEach(q=>{cur.pts.push(q);fd.push(q);});held=[];}
 function liveUpdate(){let r=null;st.forEach(t=>r=uni(r,t.take()));if(cur.smudge){st[0].put(r);return;}composite(cur.bufs,r,cur,active.ctx,snapX);}
 // is a panel, the dock or any control on top of the canvas at this point? (then the pen is aimed at it, not at the drawing)
 function overUI(e){const t=document.elementFromPoint(e.clientX,e.clientY);return!!(t&&t!==stack&&!stack.contains(t)&&t.closest('.panel,.dock,button,input,label,header,#status,.pill'));}
@@ -942,7 +949,7 @@ stack.addEventListener('pointerdown',e=>{
   prevEmit=p;fd=feeder(pt=>{st.forEach(t=>t.seg(prevEmit,pt));prevEmit=pt;});
   // The pen's first pressure reading (at touch-down) is often higher than what follows, which left a round
   // blob at the start of light strokes. With the pen, the first dab waits for the first real movement.
-  if(e.pointerType==='pen')startPending=true;else beginStroke();
+  held=[];if(e.pointerType==='pen')startPending=true;else beginStroke();
   Object.defineProperty(cur,'bufs',{value:bufs,enumerable:false,writable:true});liveUpdate();
 });
 stack.addEventListener('pointermove',e=>{
@@ -953,7 +960,10 @@ stack.addEventListener('pointermove',e=>{
   const list=evs.length?evs:[e];
   list.forEach((ev,i)=>{
     const r=raw(ev,e,(i+1)/list.length);lastRaw=r;
-    if(startPending){cur.pts[0].p=r.p;beginStroke();return;}
+    // the touch-down reading is often higher than what follows and left a dark, fat dot at the start:
+    // the stroke starts from the lightest reading in the first batch of movement
+    if(startPending){const p0=cur.pts[0];if(!held.length)p0.p=r.p;held.push(r);
+      if(Math.hypot(r.x-p0.x,r.y-p0.y)>=Math.min(8,cur.b.size*.5))beginStroke();return;}
     const q=smooth(r);cur.pts.push(q);fd.push(q);
   });
   if(e.pointerType==='pen'&&e.pressure>0)cur.prevMain=e.pressure;
@@ -1593,7 +1603,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-17b';
+const APP_BUILD='2026-10-17c';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
