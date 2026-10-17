@@ -122,6 +122,8 @@ input[type=range]{width:110px;accent-color:var(--accent)}
 #tipView{width:96px;flex:none}
 .ctl{display:grid;grid-template-columns:124px minmax(0,1fr) 44px;align-items:center;gap:8px;font-size:13px}
 .ctl input[type=range]{width:100%}
+.ctl.dis,.segrow.dis{opacity:.35;pointer-events:none}
+.pfw{display:grid;gap:4px}.pfw canvas{width:100%;height:120px;display:block;direction:ltr;touch-action:none}.pfh{display:flex;align-items:center;justify-content:space-between;font-size:13px;min-height:30px}.pfh button{height:30px;font-size:12px}
 .pgw{display:grid;gap:4px}.pgw canvas{width:100%;height:96px;display:block;direction:ltr}
 .pgl{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)}.pgl i{font-style:normal;display:flex;align-items:center;gap:4px}
 .pgl i::before{content:'';width:12px;height:3px;border-radius:2px;background:var(--c)}
@@ -491,15 +493,26 @@ function norm(src){ // preset / saved brush / older flat brush → {size,opacity
   b.heads=src.heads?src.heads.map(h=>({...base,...h})):[headOf(f)];
   return b;
 }
-const cloneB=b=>({...b,heads:b.heads.map(h=>({...h}))});
+const cloneB=b=>({...b,heads:b.heads.map(h=>{const c={...h};if(h.profile)c.profile=h.profile.slice();return c;})});
 const headBrush=(b,i)=>({...b.heads[i],size:b.size*b.heads[i].scale/100,master:b.size,cross:i===0?b.cross:'off',gap:b.gap,shadow:b.shadow??0});
 
 function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 const hash=(x,y)=>{const s=Math.sin(x*127.1+y*311.7)*43758.5453;return s-Math.floor(s);};
 
 const maskCache=new Map(), tipCache=new Map();
-function mask(shape,soft,grain,fo='smooth'){
-  const key=shape+'|'+soft+'|'+grain+'|'+fo; if(maskCache.has(key))return maskCache.get(key);
+// ---- Radial opacity profile: alpha from the centre (t=0) to the rim (t=1) ----
+// Either made from softness + falloff shape, or drawn by hand as 7 points (head.profile), joined smoothly.
+const PROF_N=7;
+function profFromSoft(soft,fo){const fw=Math.max(.012,soft/100),out=[];for(let i=0;i<PROF_N;i++){const dist=i/(PROF_N-1);let a=Math.min(1,Math.max(0,(1-dist)/fw));
+  if(fo==='smooth')a=a*a*(3-2*a);else if(fo==='gauss'){const G=3,e=Math.exp(-G);a=(Math.exp(-G*(1-a)*(1-a))-e)/(1-e);}out.push(a);}return out;}
+// monotone cubic through the points (no overshoot, so a hand-drawn profile never bulges past its points)
+function profEval(P,t){const n=P.length-1;if(t<=0)return P[0];if(t>=1)return P[n];const h=1/n,i=Math.min(n-1,Math.floor(t*n)),u=(t-i*h)/h;
+  const d=[];for(let k=0;k<n;k++)d.push((P[k+1]-P[k])/h);const m=[];for(let k=0;k<=n;k++){if(k===0)m.push(d[0]);else if(k===n)m.push(d[n-1]);else m.push(d[k-1]*d[k]<=0?0:(d[k-1]+d[k])/2);}
+  for(let k=0;k<n;k++){if(d[k]===0){m[k]=0;m[k+1]=0;}else{const a=m[k]/d[k],b=m[k+1]/d[k];if(a*a+b*b>9){const tq=3/Math.sqrt(a*a+b*b);m[k]=tq*a*d[k];m[k+1]=tq*b*d[k];}}}
+  const u2=u*u,u3=u2*u;return Math.min(1,Math.max(0,(2*u3-3*u2+1)*P[i]+(u3-2*u2+u)*h*m[i]+(-2*u3+3*u2)*P[i+1]+(u3-u2)*h*m[i+1]));}
+const profKey=b=>b.profile?'P'+b.profile.map(v=>Math.round(v*100)).join(','):b.softness+'|'+(b.falloff||'smooth');
+function mask(shape,soft,grain,fo='smooth',prof=null){
+  const key=shape+'|'+soft+'|'+grain+'|'+fo+'|'+(prof?prof.map(v=>Math.round(v*100)).join(','):''); if(maskCache.has(key))return maskCache.get(key);
   const N=256,c=document.createElement('canvas');c.width=c.height=N;const x=c.getContext('2d');const rng=mulberry(9001);
   if(shape==='spray'){
     x.fillStyle='#fff';
@@ -512,11 +525,13 @@ function mask(shape,soft,grain,fo='smooth'){
     for(let py=0;py<N;py++)for(let px=0;px<N;px++){
       const nx=(px+.5)/N*2-1,ny=(py+.5)/N*2-1;
       const dist=shape==='square'?Math.max(Math.abs(nx),Math.abs(ny)):Math.hypot(nx,ny);
-      let a=Math.min(1,Math.max(0,(1-dist)/fw));
+      let a;
+      if(prof)a=dist>=1?0:profEval(prof,dist)*Math.min(1,(1-dist)*N/1.5); // hand-drawn profile (1.5px anti-alias at the rim)
+      else{a=Math.min(1,Math.max(0,(1-dist)/fw));
       // shape of the fade, from the rim (0) to where the solid part starts (1):
       // smooth = an S-curve like Photoshop's hardness (no visible ring where the fade begins),
       // linear = straight ramp, gauss = concentrated toward the centre with a long faint tail (airbrush-like)
-      if(fo==='smooth')a=a*a*(3-2*a);else if(fo==='gauss'){const G=3,e=Math.exp(-G);a=(Math.exp(-G*(1-a)*(1-a))-e)/(1-e);}
+      if(fo==='smooth')a=a*a*(3-2*a);else if(fo==='gauss'){const G=3,e=Math.exp(-G);a=(Math.exp(-G*(1-a)*(1-a))-e)/(1-e);}}
       // feather = an even fade from transparent at the rim to solid toward the centre; the outer diameter never changes,
       // more softness only moves the start of the fade inward
       if(shape==='chalk'){if(hash(px/6|0,py/6|0)<Math.max(g,.5)*.7)a*=.06;}
@@ -538,16 +553,16 @@ function loadTip(id,data,cb){const im=new Image();im.onload=()=>{const c=documen
 // Visible alpha = opacity × (1 − e^(−density)): the core saturates at the stroke opacity, feathers blend.
 function tip(b,col){ // coloured tip, used for the single-dab view
   const custom=b.shape==='custom'&&tipMasks.has(b.tipId);
-  const key=(custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain+'|'+(b.falloff||'smooth'))+'|'+col;if(tipCache.has(key))return tipCache.get(key);
-  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain,b.falloff||'smooth'),c=document.createElement('canvas');c.width=c.height=m.width;
+  const key=(custom?'T'+b.tipId:b.shape+'|'+profKey(b)+'|'+b.grain)+'|'+col;if(tipCache.has(key))return tipCache.get(key);
+  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain,b.falloff||'smooth',b.profile||null),c=document.createElement('canvas');c.width=c.height=m.width;
   const x=c.getContext('2d');x.drawImage(m,0,0);x.globalCompositeOperation='source-in';x.fillStyle=col;x.fillRect(0,0,c.width,c.height);
   if(tipCache.size>80)tipCache.clear();tipCache.set(key,c);return c;
 }
 const grayCache=new Map(); // tip alpha arrays
 function tipData(b){
   const custom=b.shape==='custom'&&tipMasks.has(b.tipId);
-  const key=custom?'T'+b.tipId:b.shape+'|'+b.softness+'|'+b.grain+'|'+(b.falloff||'smooth');if(grayCache.has(key))return grayCache.get(key);
-  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain,b.falloff||'smooth'),N=m.width;
+  const key=custom?'T'+b.tipId:b.shape+'|'+profKey(b)+'|'+b.grain;if(grayCache.has(key))return grayCache.get(key);
+  const m=custom?tipMasks.get(b.tipId):mask(b.shape==='custom'?'round':b.shape,b.softness,b.grain,b.falloff||'smooth',b.profile||null),N=m.width;
   const d=m.getContext('2d',{willReadFrequently:true}).getImageData(0,0,N,N).data,a=new Float32Array(N*N);
   // store density, not alpha: a dab of density a' shows exactly the tip's own alpha (so the feather looks right)
   const L=-Math.log(1-.9975);for(let i=0;i<a.length;i++)a[i]=-Math.log(1-.9975*d[i*4+3]/255)/L;
@@ -731,7 +746,7 @@ function stamper(buf,b,seed,scale){
   const pFl=b.pFlow||0,pSo=b.pSoft||0,custom=b.shape==='custom'&&tipMasks.has(b.tipId),Ts=[];
   const dtOf=p=>{if(!pFl&&!b.flowJitter)return Dt;const fl=b.flow/100*(1-pFl/100*(1-pc(p,b.cFlow)))*(b.flowJitter?1-b.flowJitter/100*jrng():1);return -Math.log(1-Math.min(.9975,Math.max(.005,fl)));};
   // softness by pressure: + a light touch is softer, − a firm press is softer (in steps of 5, each tip made once)
-  const tOf=p=>{if(!pSo||custom)return T;const q=pc(p,b.cSoft),room=100-b.softness;
+  const tOf=p=>{if(!pSo||custom||b.profile)return T;const q=pc(p,b.cSoft),room=100-b.softness;
     const s=Math.round(Math.min(100,b.softness+(pSo>0?pSo/100*room*(1-q):-pSo/100*room*q))/5)*5;
     return Ts[s]||(Ts[s]=tipData({...b,softness:s}));};
   function stamp(x,y,p,az,dir,step,force){
@@ -1161,7 +1176,7 @@ const SPEC=[
   ['heads'],
   ['gh','edge','קצה'],
   ['flow','זרימה',1,100,'%','h'],['softness','רכות',0,100,'%','h'],
-  ['falloff','צורת הריכוך',[['smooth','מעוגל'],['linear','ישר'],['gauss','גאוסיאני']],null,null,'h'],['spacing','מרווח',1,100,'%','h'],
+  ['falloff','צורת הריכוך',[['smooth','מעוגל'],['linear','ישר'],['gauss','גאוסיאני']],null,null,'h'],['profile'],['spacing','מרווח',1,100,'%','h'],
   ['gh','shape','צורה'],
   ['shape','צורת קצה',[['round','עגול'],['square','מרובע'],['chalk','גיר'],['spray','ספריי'],['custom','ציור']],null,null,'h'],
   ['roundness','עגלגלות',5,100,'%','h'],['angle','זווית',0,180,'°','h'],
@@ -1216,11 +1231,11 @@ function groupSummaries(){
 // ---- Solo: draw with one parameter (and what belongs to it) while everything else is neutral ----
 let solo=null;
 const NO_SOLO=['size','smoothing','smudge','mode','strength','scale','offX','offY','offRel','colorMode'];
-const SOLO_GROUPS=[['pSize','minSize','cSize'],['pOpacity','cOpacity'],['pFlow','cFlow','flow'],['softness','falloff'],['pSoft','cSoft','softness','falloff'],
+const SOLO_GROUPS=[['pSize','minSize','cSize'],['pOpacity','cOpacity'],['pFlow','cFlow','flow'],['softness','falloff','profile'],['pSoft','cSoft','softness','falloff','profile'],
   ['fadeLen','fadeOpacity','fadeSize'],['taperStart','taperEnd','taperMin','taperOpacity'],['roundness','angle','angleSrc'],['cross','gap','shadow'],['shape','tipId','tipData']];
 const soloKeys=k=>{const g=SOLO_GROUPS.find(g=>g.includes(k));return g||[k];};
 const BRUSH_NEUTRAL={opacity:100,overlap:100,cross:'off'};
-const HEAD_NEUTRAL={taperStart:0,taperEnd:0,shape:'round',flow:100,softness:0,spacing:4,roundness:100,angle:0,angleSrc:'fixed',grain:0,scatter:0,sizeJitter:0,angleJitter:0,
+const HEAD_NEUTRAL={taperStart:0,taperEnd:0,profile:null,shape:'round',flow:100,softness:0,spacing:4,roundness:100,angle:0,angleSrc:'fixed',grain:0,scatter:0,sizeJitter:0,angleJitter:0,
   pSize:0,minSize:0,cSize:0,pOpacity:0,cOpacity:0,pFlow:0,cFlow:0,pSoft:0,cSoft:0,opJitter:0,flowJitter:0,fadeLen:0,
   scale:100,offX:0,offY:0,mode:'add',strength:100,colorMode:'current'};
 function effB(){ // the brush actually used for drawing and the preview
@@ -1234,6 +1249,37 @@ function soloBtn(row,k){if(NO_SOLO.includes(k))return;const sp=row.querySelector
   bt.className='solo';bt.type='button';bt.setAttribute('aria-label','לצייר רק עם '+sp.textContent);bt.title='בידוד: לצייר רק עם הפרמטר הזה';
   bt.onclick=e=>{e.preventDefault();e.stopPropagation();setSolo(k);};sp.prepend(bt);}
 $('soloOff').onclick=()=>setSolo(solo);
+// ---- profile editor: the head's alpha from centre to rim, with draggable points ----
+let pfCv=null;
+function curProfile(h){return h.profile||profFromSoft(h.softness,h.falloff||'smooth');}
+function drawProfile(){
+  if(!pfCv)return;const r=pfCv.getBoundingClientRect();if(!r.width)return;const s=window.devicePixelRatio||1;
+  pfCv.width=Math.round(r.width*s);pfCv.height=Math.round(r.height*s);const x=pfCv.getContext('2d');x.scale(s,s);
+  const W=r.width,H=r.height,pad=10,h=B.heads[curHead],P=curProfile(h),own=!!h.profile,css=getComputedStyle(document.body),ink=css.color;
+  x.clearRect(0,0,W,H);x.strokeStyle=ink;x.globalAlpha=.15;x.lineWidth=1;x.strokeRect(pad+.5,pad+.5,W-2*pad-1,H-2*pad-1);
+  for(let i=1;i<4;i++){const gx=pad+(W-2*pad)*i/4;x.beginPath();x.moveTo(gx,pad);x.lineTo(gx,H-pad);x.stroke();}x.globalAlpha=1;
+  const X=t=>pad+t*(W-2*pad),Y=v=>H-pad-v*(H-2*pad);
+  // the fill shows the dab's actual look: dark where opaque
+  x.beginPath();x.moveTo(X(0),Y(0));for(let i=0;i<=60;i++){const t=i/60;x.lineTo(X(t),Y(profEval(P,t)));}x.lineTo(X(1),Y(0));x.closePath();
+  x.fillStyle=own?'#a855f7':ink;x.globalAlpha=.18;x.fill();x.globalAlpha=1;
+  x.strokeStyle=own?'#a855f7':ink;x.lineWidth=2;x.beginPath();for(let i=0;i<=60;i++){const t=i/60;i?x.lineTo(X(t),Y(profEval(P,t))):x.moveTo(X(t),Y(profEval(P,t)));}x.stroke();
+  P.forEach((v,i)=>{const t=i/(PROF_N-1);x.beginPath();x.arc(X(t),Y(v),6,0,7);x.fillStyle=css.getPropertyValue('--dock')||'#fff';x.fill();x.lineWidth=2;x.strokeStyle=own?'#a855f7':ink;x.stroke();});
+  x.fillStyle=css.getPropertyValue('--muted')||ink;x.font='10px system-ui';x.textBaseline='bottom';x.textAlign='left';x.fillText('מרכז',pad+3,H-pad-2);x.textAlign='right';x.fillText('שפה',W-pad-3,H-pad-2);
+  const rb=$('pfReset');if(rb)rb.hidden=!own;
+}
+function setupProfile(cv,resetBtn){
+  pfCv=cv;let id=null,pi=-1;
+  const pos=e=>{const r=cv.getBoundingClientRect(),pad=10;return{t:(e.clientX-r.left-pad)/(r.width-2*pad),v:1-(e.clientY-r.top-pad)/(r.height-2*pad)};};
+  cv.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();const h=B.heads[curHead];const q=pos(e);
+    pi=Math.round(Math.min(1,Math.max(0,q.t))*(PROF_N-1));if(!h.profile)h.profile=curProfile(h).slice();
+    id=e.pointerId;try{cv.setPointerCapture(id);}catch(_){}move(e);});
+  const move=e=>{if(e.pointerId!==id)return;e.preventDefault();const h=B.heads[curHead],q=pos(e);
+    h.profile[pi]=Math.min(1,Math.max(0,q.v));changed('profile');};
+  cv.addEventListener('pointermove',move);
+  const up=e=>{if(e.pointerId!==id)return;id=null;pi=-1;};
+  cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+  resetBtn.onclick=()=>{delete B.heads[curHead].profile;changed();};
+}
 const tgt=sc=>sc==='b'?B:B.heads[curHead];
 SPEC.forEach(([k,label,a,b2,unit,sc])=>{
   if(k==='g'||k==='gh'){addGroup(label,a,k==='gh');return;}
@@ -1244,6 +1290,9 @@ SPEC.forEach(([k,label,a,b2,unit,sc])=>{
   if(k==='pgraph'){const w=document.createElement('div');w.className='pgw';
     w.innerHTML='<canvas id="pGraph" aria-label="גרף התגובה ללחץ"></canvas><div class="pgl"><i style="--c:#2f6fde">גודל</i><i style="--c:#e5484d">שקיפות</i><i style="--c:#30a46c">זרימה</i><i style="--c:#a855f7">רכות</i></div>';
     place(w);return;}
+  if(k==='profile'){const w=document.createElement('div');w.className='pfw';
+    w.innerHTML='<div class="pfh"><span>שקיפות מהמרכז החוצה</span><button type="button" id="pfReset" hidden>חזרה לרכות</button></div><canvas id="pfCv" aria-label="פרופיל השקיפות של הראש, מהמרכז לשפה"></canvas><p class="hint2">גרור את הנקודות. שמאל = מרכז המברשת, ימין = השפה.</p>';
+    place(w);setupProfile(w.querySelector('#pfCv'),w.querySelector('#pfReset'));return;}
   if(k==='pHint'){const p=document.createElement('p');p.className='hint2';
     p.textContent='עקומה: פלוס — מגיב כבר בנגיעה קלה · מינוס — צריך ללחוץ חזק. רכות: פלוס — נגיעה קלה רכה יותר · מינוס — לחיצה חזקה רכה יותר.';place(p);return;}
   if(k==='modeHint'){const p=document.createElement('p');p.className='hint2';p.id='modeHint';place(p);return;}
@@ -1293,6 +1342,8 @@ function syncCtls(){
   inputs.cFlow.row.hidden=!H.pFlow;inputs.cSoft.row.hidden=!H.pSoft;drawPGraph();
   inputs.fadeOpacity.row.hidden=inputs.fadeSize.row.hidden=!H.fadeLen;
   inputs.falloff.row.hidden=!H.softness&&!H.pSoft;
+  // with a hand-drawn profile the softness controls are dimmed, not hidden, so the graph doesn't jump under the pen
+  ['softness','falloff','pSoft','cSoft'].forEach(k=>inputs[k].row.classList.toggle('dis',!!H.profile));drawProfile();
   inputs.taperMin.row.hidden=inputs.taperOpacity.row.hidden=!(H.taperStart||H.taperEnd);
   {const ks=solo?soloKeys(solo):[];ctls.classList.toggle('soloing',!!solo);$('soloBar').hidden=!solo;
    if(solo)$('soloName').textContent=(specOf(solo)||[,solo])[1]+(B.heads.length>1?' (ראש '+(curHead+1)+')':'');
@@ -1614,7 +1665,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-17g';
+const APP_BUILD='2026-10-17h';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1624,11 +1675,11 @@ function pickAt(c){let best=null,bd=1e9;
       for(const p of s.pts){const d=Math.hypot(p.x-c.x,p.y-c.y);if(d<tol&&d<bd){bd=d;best={L,s};}}}}
   return best;}
 const specOf=k=>SPEC.find(e=>e[0]===k);
-function fmtVal(k,v){const e=specOf(k);if(!e)return String(v);
+function fmtVal(k,v){if(Array.isArray(v))return v.map(x=>Math.round(x*100)).join('·')+'%';if(v==null)return '—';const e=specOf(k);if(!e)return String(v);
   if(Array.isArray(e[2])){const o=e[2].find(x=>x[0]===v);return o?o[1]:String(v);}
   return (typeof v==='number'?Math.round(v*10)/10:v)+(e[4]||'');}
-const labelOf=k=>{const e=specOf(k);return e?e[1]:k;};
-const HEAD_KEYS=['shape','flow','softness','falloff','spacing','roundness','angle','angleSrc','grain','scatter','sizeJitter','angleJitter','pSize','minSize','cSize','pOpacity','cOpacity','pFlow','cFlow','pSoft','cSoft','opJitter','flowJitter','fadeLen','fadeOpacity','fadeSize','taperStart','taperEnd','taperMin','taperOpacity'];
+const labelOf=k=>{if(k==='profile')return 'פרופיל ידני';const e=specOf(k);return e?e[1]:k;};
+const HEAD_KEYS=['shape','flow','softness','falloff','profile','spacing','roundness','angle','angleSrc','grain','scatter','sizeJitter','angleJitter','pSize','minSize','cSize','pOpacity','cOpacity','pFlow','cFlow','pSoft','cSoft','opJitter','flowJitter','fadeLen','fadeOpacity','fadeSize','taperStart','taperEnd','taperMin','taperOpacity'];
 const MULTI_KEYS=['mode','strength','scale','offX','offY','offRel','colorMode'];
 function strokeStats(s){let len=0,pmin=1,pmax=0;s.pts.forEach((p,i)=>{if(i)len+=Math.hypot(p.x-s.pts[i-1].x,p.y-s.pts[i-1].y);pmin=Math.min(pmin,p.p);pmax=Math.max(pmax,p.p);});
   return{n:s.pts.length,len:Math.round(len),pmin:Math.round(pmin*100),pmax:Math.round(pmax*100)};}
