@@ -60,6 +60,9 @@ button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;s
 .sw.on{border-color:var(--ink);box-shadow:0 0 0 2px var(--dock),0 0 0 4px var(--ink)}
 input[type=color]{width:34px;height:34px;border:none;background:none;padding:0;cursor:pointer}
 input[type=range]{width:110px;accent-color:var(--accent)}
+/* a slider whose "off" is in the middle gets a centre mark under the track */
+.ctl.bi input[type=range]{background:linear-gradient(var(--muted),var(--muted)) center/2px 14px no-repeat}
+.ctl.bi output{font-weight:600}
 .size-dot{width:28px;height:28px;display:grid;place-items:center}
 .size-dot i{display:block;border-radius:50%;background:var(--ink)}
 
@@ -1185,6 +1188,9 @@ const SPEC=[
   ['headColor']
 ];
 const ctls=$('ctls'),inputs={},headSecs=[];
+// settings that do nothing at 0 say so, instead of a bare "0" (the ones with a middle were easy to leave at an end by mistake)
+const OFF_AT_0=new Set(['pSize','pOpacity','pFlow','pSoft','cSize','cOpacity','cFlow','cSoft','opJitter','flowJitter','fadeLen','taperStart','taperEnd','scatter','sizeJitter','angleJitter','grain','softness','smudge']);
+const valText=(k,v,unit)=>OFF_AT_0.has(k)&&+v===0?'כבוי':v+unit;
 // Controls live in groups that open and close (several can be open at once). A closed group shows,
 // in its header, the settings in it that are not at their default, so the brush can be read at a glance.
 const groups={};let curGroup=null,openGroups={brush:1,edge:1,pressure:1};
@@ -1249,7 +1255,8 @@ SPEC.forEach(([k,label,a,b2,unit,sc])=>{
   const row=document.createElement('label');row.className='ctl';
   row.innerHTML='<span>'+label+'</span><input type="range" id="b_'+k+'" min="'+a+'" max="'+b2+'"><output></output>';
   const inp=row.querySelector('input'),out=row.querySelector('output');
-  inp.oninput=()=>{tgt(sc)[k]=+inp.value;out.textContent=inp.value+unit;changed(k);};
+  if(a<0)row.classList.add('bi'); // a slider with a middle: its "off" is the centre, not an end
+  inp.oninput=()=>{tgt(sc)[k]=+inp.value;out.textContent=valText(k,+inp.value,unit);changed(k);};
   place(row);inputs[k]={inp,out,unit,row,sc};soloBtn(row,k);if(curGroup)curGroup.keys.push(k);
 });
 function renderHeads(){
@@ -1277,7 +1284,7 @@ function syncCtls(){
   for(const k in inputs){const c=inputs[k],o=tgt(c.sc);
     if(c.seg)c.seg.querySelectorAll('button').forEach(b=>{b.classList.toggle('on',b.dataset.v===o[k]);
       if(b.dataset.v==='custom')b.hidden=!H.tipId;});
-    else{c.inp.value=o[k];c.out.textContent=o[k]+c.unit;}}
+    else{c.inp.value=o[k];c.out.textContent=valText(k,o[k],c.unit);}}
   inputs.gap.row.hidden=inputs.shadow.row.hidden=B.cross==='off';
   // a curve (and the minimum) only matters when that link is on
   inputs.minSize.row.hidden=inputs.cSize.row.hidden=!H.pSize;inputs.cOpacity.row.hidden=!H.pOpacity;
@@ -1605,7 +1612,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-17d';
+const APP_BUILD='2026-10-17e';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
