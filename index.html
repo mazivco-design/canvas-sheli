@@ -665,7 +665,9 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm,rs){
       // opacity level (pressure, fade, taper): each dab repaints the pixel's level toward its own, by how solidly
       // it covers it (the first pass and a later pass over it keep separate levels). Keeping the maximum instead
       // turned any ripple in the pressure into a staircase, so the level is eased in the stamper instead.
-      if(O){const cov=Math.min(1,acc*inv),P=ds>thr&&(ds-thr)/ramp>.5?O2:O,ov=P[k];P[k]=ov<0?oj:ov+(oj-ov)*cov;
+      // A dab may lower the level only within its own pass (ds ≤ thr: the pen is still here, and the pressure just
+      // rippled). Coming back over the stroke later (a scribble, a crossing), a lighter pass never lightens a darker one.
+      if(O){const cov=Math.min(1,acc*inv),later=ds>thr,P=later&&(ds-thr)/ramp>.5?O2:O,ov=P[k],nv=ov<0?oj:ov+(oj-ov)*cov;P[k]=later&&ov>=0?Math.max(ov,nv):nv;
         // opacity jitter is a texture, so it is repainted toward each dab's own random level instead
         if(OJ){const jv=OJ[k];OJ[k]=jv<0?ojit:jv+(ojit-jv)*cov;}}
       if(ds>thr){const wv=Math.min(1,(ds-thr)/ramp);F2[k]+=acc*wgt*wv;if(wv>.35)again=true;
@@ -1603,7 +1605,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-17c';
+const APP_BUILD='2026-10-17d';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
