@@ -662,10 +662,10 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm,rs){
     if(acc>0){const k=py*W+px;let fs=FS[k];if(fs<0){FS[k]=fs=sd;}
       // painted long ago in this same stroke (further back than one brush width) → this is a second pass
       const ds=sd-fs;
-      // opacity level (pressure, fade, taper): the pixel keeps the highest level any dab gave it, so where the
-      // pen slows down or lifts, the lighter dabs never lighten what a firmer dab already laid
-      // (the first pass and a later pass over it keep separate levels)
-      if(O){const cov=Math.min(1,acc*inv),P=ds>thr&&(ds-thr)/ramp>.5?O2:O,ov=P[k],nv=ov<0?oj:ov+(oj-ov)*cov;P[k]=ov<0?nv:Math.max(ov,nv);
+      // opacity level (pressure, fade, taper): each dab repaints the pixel's level toward its own, by how solidly
+      // it covers it (the first pass and a later pass over it keep separate levels). Keeping the maximum instead
+      // turned any ripple in the pressure into a staircase, so the level is eased in the stamper instead.
+      if(O){const cov=Math.min(1,acc*inv),P=ds>thr&&(ds-thr)/ramp>.5?O2:O,ov=P[k];P[k]=ov<0?oj:ov+(oj-ov)*cov;
         // opacity jitter is a texture, so it is repainted toward each dab's own random level instead
         if(OJ){const jv=OJ[k];OJ[k]=jv<0?ojit:jv+(ojit-jv)*cov;}}
       if(ds>thr){const wv=Math.min(1,(ds-thr)/ramp);F2[k]+=acc*wgt*wv;if(wv>.35)again=true;
@@ -699,7 +699,7 @@ function stamper(buf,b,seed,scale){
   const crng=mulberry(seed^0x5bd1e995),pickMode=()=>b.cross==='random'?(crng()<.5?1:2):b.cross==='under'?2:1;
   let inCross=false,lastCross=0,runStart=0,curMode=0,nextMode=pickMode();
   buf.thr=thr;buf.ramp=b.size*scale;buf.gpx=gapPx;buf.spx=shPx;if(crossOn)crossBufs(buf);
-  const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true,nSt=0,firstShare=1,firstArgs=null;
+  const rd=Math.max(.05,b.roundness/100),baseAng=b.angle*Math.PI/180;let rem=0,dirty=null,first=true,nSt=0,firstShare=1,firstArgs=null,lvS=null;
   const Dt=-Math.log(1-Math.min(.9975,Math.max(.005,b.flow/100))); // centre density of one pass (flow 100 → solid)
   // each pressure link has its own curve: + reacts already to a light touch, − needs a firm press
   const pc=(p,c)=>c?Math.pow(Math.min(1,Math.max(0,p)),Math.pow(2,-c/50)):p;
@@ -738,7 +738,10 @@ function stamper(buf,b,seed,scale){
     if(b.opJitter)buf.ojit=1-b.opJitter/100*jrng();
     if(fadeOn)lvl*=Math.max(0,1-(b.fadeOpacity||0)/100*(1-fk()));
     if(taperOn&&b.taperOpacity)lvl*=1-b.taperOpacity/100*(1-tk());
-    if(capOn){buf.oj=lvl;lvl=1;}
+    // The level follows a rise quickly (a quarter brush width) but a drop slowly (three brush widths): where the
+    // pen slows, turns or lifts, the pressure falls over a short distance, and without this the lighter dabs
+    // painted pale discs over what a firmer dab had just laid.
+    if(capOn){if(lvS==null)lvS=lvl;else{const kk=1-Math.exp(-(step||0)/Math.max(1,b.size*(lvl>lvS?.25:3)));lvS+=(lvl-lvS)*kk;}buf.oj=lvS;lvl=1;}
     const ang=baseAng+(b.angleSrc==='direction'?dir:(b.angleSrc==='tilt'&&az!=null?az:0))+(rng()-.5)*2*Math.PI*b.angleJitter/100;
     if(b.offX||b.offY){let ox=b.offX/100*b.master,oy=b.offY/100*b.master;
       if(b.offRel==='direction'){const c=Math.cos(dir),sn=Math.sin(dir);[ox,oy]=[ox*c-oy*sn,ox*sn+oy*c];}x+=ox;y+=oy;}
@@ -1590,7 +1593,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-17a';
+const APP_BUILD='2026-10-17b';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
