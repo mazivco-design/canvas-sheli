@@ -587,7 +587,7 @@ function composite(bufs,r,s,target,base){
   const w=x1-x0,h=y1-y0;if(w<=0||h<=0)return;
   const img=base.getImageData(x0,y0,w,h),d=img.data;
   const op=s.b.opacity/100,t=(s.b.overlap??100)/100,[R,G,Bc]=rgb(s.erase?'#000':s.color);
-  const Os=bufs.map(b=>b.o||null),O2s=bufs.map(b=>b.o2||null),OJs=bufs.map(b=>b.oJ||null),Fs=bufs.map(b=>b.f),Ms=bufs.map(b=>b.m),F2s=bufs.map(b=>b.f2),str=s.b.heads.map(h=>h.strength/100),md=s.b.heads.map(h=>MODES[h.mode]||0);
+  const Os=bufs.map(b=>b.o||null),O2s=bufs.map(b=>b.o2||null),OJs=bufs.map(b=>b.oJ||null),Fs=bufs.map(b=>b.f),Ms=bufs.map(b=>b.m),F2s=bufs.map(b=>b.f2),str=s.b.heads.map(h=>h.strength/100),md=s.b.heads.map(h=>MODES[h.mode]||0),bld=s.b.heads.map(h=>1-Math.min(1,Math.max(0,h.flow/100)));
   const hc=s.b.heads.map(h=>!s.erase&&h.colorMode==='own'&&h.color?rgb(h.color):[R,G,Bc]);
   // crossing effect: 1 = the pass that comes back goes over (a light gap opens in the older line around it),
   // 2 = it goes under (the gap opens in the new pass around the older line)
@@ -610,7 +610,9 @@ function composite(bufs,r,s,target,base){
     const k=row+xx;let a1=0,as=0,a2=0,rev=false,cr=R,cg=G,cb=Bc;
     for(let hh=0;hh<n;hh++){const c=hc[hh];
       // ink of this head: accumulated density, or its strongest single dab (keeps hard edges crisp); one full pass = 1
-      const g1=Math.max(Fs[hh][k],Ms[hh][k]),g2=F2s[hh][k];
+      // At flow 100 a pass shows the tip's own profile (its strongest single dab), so a soft brush stays as soft
+      // along the stroke as its dab. Lower flow lets the dabs build up on each other instead (Photoshop's flow).
+      const mm=Ms[hh][k],ff=Fs[hh][k],g1=mm+(ff>mm?(ff-mm)*bld[hh]:0),g2=F2s[hh][k];
       let c1=g1>1e-4?Math.min(1,(1-Math.exp(-g1))/.9975)*str[hh]:0;let cs=c1,c2=0;
       if(g2>1e-4){rev=true;cs=Math.min(1,(1-Math.exp(-(g1+g2)))/.9975)*str[hh];c2=Math.min(1,(1-Math.exp(-g2))/.9975)*str[hh];}
       if(Os[hh]){let o1=Os[hh][k],o2=O2s[hh][k];const jv=OJs[hh]?OJs[hh][k]:-1;if(jv>=0){if(o1>=0)o1*=jv;if(o2>=0)o2*=jv;}
@@ -1612,7 +1614,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-17e';
+const APP_BUILD='2026-10-17f';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
