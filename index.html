@@ -1655,9 +1655,13 @@ function buildReport(sel){
   lines.forEach(l=>{
     if(l[0]==='h'){if(col){y+=LH;col=0;}y+=LH*.4;o.fillStyle='#2f6fde';o.font='700 '+(FS+1)+'px system-ui,-apple-system,sans-serif';o.fillText(l[1],px+PW-20,y);
       o.fillStyle='#e3e1d9';o.fillRect(px+20,y+8,PW-40,1);y+=LH;return;}
+    // a long entry (e.g. a brush name with a solo note) takes a whole row instead of running into its neighbour
+    o.font='500 '+FS+'px system-ui,-apple-system,sans-serif';const lw=o.measureText(l[0]+': ').width;
+    o.font='600 '+FS+'px system-ui,-apple-system,sans-serif';const vw=o.measureText(String(l[1])).width,wide=lw+vw>colW-16;
+    if(wide&&col){col=0;y+=LH;}
     const xr=px+PW-20-col*colW;o.font='500 '+FS+'px system-ui,-apple-system,sans-serif';o.fillStyle='#6b6f76';o.fillText(l[0]+':',xr,y);
-    const lw=o.measureText(l[0]+': ').width;o.fillStyle='#1f2328';o.font='600 '+FS+'px system-ui,-apple-system,sans-serif';o.fillText(String(l[1]),xr-lw,y);
-    col++;if(col===colN){col=0;y+=LH;}
+    o.fillStyle='#1f2328';o.font='600 '+FS+'px system-ui,-apple-system,sans-serif';o.fillText(String(l[1]),xr-lw,y);
+    if(wide){col=0;y+=LH;}else{col++;if(col===colN){col=0;y+=LH;}}
   });
   o.fillStyle='#9a9ca3';o.font='400 16px system-ui,-apple-system,sans-serif';o.fillText('מחברת עיפרון · '+APP_BUILD,px+PW-20,out.height-34);
   return out;}
