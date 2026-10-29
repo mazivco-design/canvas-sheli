@@ -612,7 +612,7 @@ function composite(bufs,r,s,target,base){
   // 2 = it goes under (the gap opens in the new pass around the older line)
   // 3 = random: each crossing decided its own way (stored per pixel in hm)
   const cross=!buf.hb?0:s.b.cross==='over'?1:s.b.cross==='under'?2:s.b.cross==='random'?3:0,HB=buf.hb,HS=buf.hs,HM=buf.hm,FS0=buf.fs,F0=buf.f,M0=buf.m,thr0=buf.thr||0,ramp0=buf.ramp||1;
-  const oldW=ds=>ds<=thr0?0:Math.min(1,(ds-thr0)/ramp0); // how clearly a pixel belongs to an earlier pass
+  const maxFa=Math.max(...s.b.heads.map(h=>Math.min(1,h.flow/100)))||1,oldW=ds=>ds<=thr0?0:Math.min(1,(ds-thr0)/ramp0); // how clearly a pixel belongs to an earlier pass
   // gap: a clean cut in the lower line next to the upper one · shadow: the lower line darkens toward the upper one
   const gw=buf.gpx||0,sw=buf.spx||0,shStr=(s.b.shadow??0)/100,reach=gw+sw;
   // for "under": distance from a pixel of the new pass to the older line, searched on a grid nearest-first
@@ -620,7 +620,7 @@ function composite(bufs,r,s,target,base){
     for(let oy=-reach;oy<=reach;oy+=st)for(let ox=-reach;ox<=reach;ox+=st){const d2=ox*ox+oy*oy;if(d2<=R2)offs.push([Math.round(ox),Math.round(oy),Math.sqrt(d2)]);}
     offs.sort((a,b)=>a[2]-b[2]);}
   let dW=1;const distOld=(px,py,hs)=>{for(const[ox,oy,dd]of offs){const qx=px+ox,qy=py+oy;if(qx<0||qy<0||qx>=W||qy>=H)continue;
-      const j=qy*W+qx,f=FS0[j];if(f<0)continue;const w=oldW(hs-f);if(w<=.05)continue;const g=Math.max(F0[j],M0[j]);if(g>.7){dW=w;return dd;}}return 1e9;}; // g>.7 ≈ past the line's mid-edge
+      const j=qy*W+qx,f=FS0[j];if(f<0)continue;const w=oldW(hs-f);if(w<=.05)continue;const g=M0[j];if(g>.5*maxFa){dW=w;return dd;}}return 1e9;}; // g>.7 ≈ past the line's mid-edge
   // returns how much to cut (0..1) and darken (0..1) for a pixel this far from the upper line
   let cut=0,shade=0;const near=dd=>{cut=gw>0?Math.min(1,Math.max(0,gw-dd+.5)):0;
     shade=sw>0&&shStr>0&&dd<reach?shStr*Math.pow(Math.max(0,1-Math.max(0,dd-gw)/sw),1.5):0;};
@@ -628,14 +628,12 @@ function composite(bufs,r,s,target,base){
    for(let xx=0;xx<w;xx++){
     const k=row+xx;let a1=0,as=0,a2=0,rev=false,cr=R,cg=G,cb=Bc;
     for(let hh=0;hh<n;hh++){const c=hc[hh];
-      // ink of this head: accumulated density, or its strongest single dab (keeps hard edges crisp); one full pass = 1
-      // At flow 100 a pass shows the tip's own profile (its strongest single dab), so a soft brush stays as soft
-      // along the stroke as its dab. Lower flow lets the dabs build up on each other instead (Photoshop's flow).
-      const mm=Ms[hh][k],ff=Fs[hh][k],g1=mm+(ff>mm?(ff-mm)*bld[hh]:0),m2=M2s[hh][k],f2=F2s[hh][k],g2=m2+(f2>m2?(f2-m2)*bld[hh]:0);
-      let c1=g1>1e-4?Math.min(1,(1-Math.exp(-g1))/.9975)*str[hh]:0;let cs=c1,c2=0;
+      // ink of this head in one pass = its strongest single dab: the tip's profile × flow. The stroke's cross-section
+      // is then exactly the profile (dabs piling up along the path used to make it harder, more so at low flow).
+      const m2=M2s[hh][k];let c1=Math.min(1,Ms[hh][k])*str[hh];let cs=c1,c2=0;
       // where the stroke came back over itself: cs is the "no darkening" result (the darker of the two passes;
       // summing their ink was the same as glazing, so overlap 0 used to do nothing at opacity 100)
-      if(g2>1e-4){rev=true;c2=Math.min(1,(1-Math.exp(-g2))/.9975)*str[hh];cs=Math.max(c1,c2);}
+      if(m2>1e-4){rev=true;c2=Math.min(1,m2)*str[hh];cs=Math.max(c1,c2);}
       if(Os[hh]){let o1=Os[hh][k],o2=O2s[hh][k];const jv=OJs[hh]?OJs[hh][k]:-1;if(jv>=0){if(o1>=0)o1*=jv;if(o2>=0)o2*=jv;}
         const l1=o1<0?(o2<0?1:o2):o1,l2=o2<0?l1:o2;c1*=l1;c2*=l2;cs*=Math.max(l1,l2);}
       if(hh===0){a1=c1;as=cs;a2=c2;cr=c[0];cg=c[1];cb=c[2];continue;}
@@ -674,7 +672,7 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm,rs){
   const W=buf.W,H=buf.H,F=buf.f,M=buf.m,F2=buf.f2,M2=buf.m2,FS=buf.fs,N=L0.N,A=L0.a,c=Math.cos(ang),si=Math.sin(ang),ir=1/r,ird=1/(r*rd),half=N/2;
   const x0=Math.max(0,Math.floor(cx-r)),x1=Math.min(W,Math.ceil(cx+r)+1),y0=Math.max(0,Math.floor(cy-r)),y1=Math.min(H,Math.ceil(cy+r)+1);
   if(x1<=x0||y1<=y0)return null;
-  const ss=r<4?4:r<10?3:r<24?2:1,step=1/ss,off=step/2,wgt=D/(ss*ss),wf=Dfull/(ss*ss);let again=false;const O=buf.oj!=null?buf.o:null,O2=buf.o2,oj=buf.oj,OJ=buf.ojit!=null?buf.oJ:null,ojit=buf.ojit,inv=1/(ss*ss);
+  const ss=r<4?4:r<10?3:r<24?2:1,step=1/ss,off=step/2,wgt=D/(ss*ss),wf=Dfull/(ss*ss),fa=1-Math.exp(-Dfull);let again=false;const O=buf.oj!=null?buf.o:null,O2=buf.o2,oj=buf.oj,OJ=buf.ojit!=null?buf.oJ:null,ojit=buf.ojit,inv=1/(ss*ss);
   for(let py=y0;py<y1;py++)for(let px=x0;px<x1;px++){
     let acc=0;
     for(let sy=0;sy<ss;sy++)for(let sx=0;sx<ss;sx++){
@@ -686,6 +684,9 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm,rs){
       acc+=(a0+(a1-a0)*fx)*(1-fy)+(a2+(a3-a2)*fx)*fy;
     }
     if(acc>0){const k=py*W+px;let fs=FS[k];if(fs<0){FS[k]=fs=sd;}
+      // M / M2 hold coverage (0..1): the strongest single dab = the tip's own alpha × this dab's flow, so one pass
+      // shows exactly the tip's profile scaled by the flow, whatever the flow is
+      const ta=Math.min(1,(1-Math.exp(-acc*inv*5.9915))/.9975)*fa;
       // painted long ago in this same stroke (further back than one brush width) → this is a second pass
       const ds=sd-fs;
       // opacity level (pressure, fade, taper): each dab repaints the pixel's level toward its own, by how solidly
@@ -696,9 +697,9 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm,rs){
       if(O){const cov=Math.min(1,acc*inv),later=ds>thr,P=later&&(ds-thr)/ramp>.5?O2:O,ov=P[k],nv=ov<0?oj:ov+(oj-ov)*cov;P[k]=later&&ov>=0?Math.max(ov,nv):nv;
         // opacity jitter is a texture, so it is repainted toward each dab's own random level instead
         if(OJ){const jv=OJ[k];OJ[k]=jv<0?ojit:jv+(ojit-jv)*cov;}}
-      if(ds>thr){const wv=Math.min(1,(ds-thr)/ramp);F2[k]+=acc*wgt*wv;{const v2=acc*wf*wv;if(v2>M2[k])M2[k]=v2;}if(wv>.35)again=true;
-        if(wv<1){F[k]+=acc*wgt*(1-wv);const v=acc*wf*(1-wv);if(v>M[k])M[k]=v;}}
-      else{F[k]+=acc*wgt;const v=acc*wf;if(v>M[k])M[k]=v;}}
+      if(ds>thr){const wv=Math.min(1,(ds-thr)/ramp);F2[k]+=acc*wgt*wv;{const v2=ta*wv;if(v2>M2[k])M2[k]=v2;}if(wv>.35)again=true;
+        if(wv<1){F[k]+=acc*wgt*(1-wv);const v=ta*(1-wv);if(v>M[k])M[k]=v;}}
+      else{F[k]+=acc*wgt;if(ta>M[k])M[k]=ta;}}
   }
   buf.again=again;
   if(gw==null||!again||!buf.hb)return{x0,y0,x1,y1};
@@ -1696,7 +1697,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-17i';
+const APP_BUILD='2026-10-29a';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
