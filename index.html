@@ -433,9 +433,9 @@ input[type=range]{width:110px;accent-color:var(--accent)}
   <div id="shareBox" hidden>
     <div class="card">
       <img id="shareImg" alt="תמונה לשיתוף עם המשיכה והפרמטרים שלה">
-      <p>לחיצה ארוכה על התמונה ← העתק, ואז הדבק בשיחה עם Claude</p>
+      <p>"שיתוף מלא" שולח את התמונה ואת הנתונים יחד. אם אין חלונית שיתוף, הם מועתקים, ואז מדביקים בשיחה עם Claude.</p>
       <div class="row">
-        <button id="shareSend" class="on" hidden>שתף…</button>
+        <button id="shareSend" class="on">שיתוף מלא</button>
         <button id="shareCopy">העתק פרמטרים</button>
         <button id="sharePick">בחר משיכה אחרת</button>
         <button id="shareClose">סגור</button>
@@ -1697,7 +1697,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-29a';
+const APP_BUILD='2026-10-29b';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1779,14 +1779,28 @@ function openShare(sel){
   if(!sel){toast('עוד אין משיכות לשתף');return;}
   shareSel=sel;const cv=buildReport(sel);shareJson=reportJson(sel);
   $('shareImg').src=cv.toDataURL('image/png');$('shareBox').hidden=false;shareBlob=null;
-  cv.toBlob(bl=>{shareBlob=bl;const f=bl&&new File([bl],'brush-report.png',{type:'image/png'});
-    $('shareSend').hidden=!(f&&navigator.canShare&&navigator.canShare({files:[f]}));},'image/png');
+  shareBlobP=new Promise(res=>cv.toBlob(bl=>{shareBlob=bl;res(bl);},'image/png'));
 }
 $('shareBtn').onclick=()=>openShare(lastStroke());
 $('sharePick').onclick=()=>{$('shareBox').hidden=true;picking=true;toast('גע במשיכה שתרצה לשתף');};
 $('shareClose').onclick=()=>{$('shareBox').hidden=true;};
-$('shareSend').onclick=async()=>{try{const f=new File([shareBlob],'brush-report.png',{type:'image/png'});
-  await navigator.share({files:[f],text:'פרמטרים של משיכה ממחברת עיפרון:\n'+shareJson});}catch(e){if(e&&e.name!=='AbortError')toast('לא הצלחתי לפתוח שיתוף – לחיצה ארוכה על התמונה');}};
+// Full share: the image and the parameters together, by whatever route this browser allows.
+// 1) the share sheet with the image file + text; 2) the clipboard with both (image and text in one copy);
+// 3) save the image as a file and copy the text.
+let shareBlobP=null;
+const shareTxt=()=>'פרמטרים של משיכה ממחברת עיפרון:\n'+shareJson;
+$('shareSend').onclick=async()=>{
+  const bl=shareBlob,f=bl&&new File([bl],'brush-report.png',{type:'image/png'});
+  if(f&&navigator.canShare&&navigator.canShare({files:[f],text:'x'})){
+    try{await navigator.share({files:[f],text:shareTxt()});return;}catch(e){if(e&&e.name==='AbortError')return;}}
+  // the clipboard write has to start inside the tap, so the image goes in as a promise
+  if(navigator.clipboard&&navigator.clipboard.write&&window.ClipboardItem){
+    try{await navigator.clipboard.write([new ClipboardItem({'image/png':shareBlobP||Promise.resolve(bl),'text/plain':new Blob([shareTxt()],{type:'text/plain'})})]);
+      toast('התמונה והנתונים הועתקו – הדבק בשיחה עם Claude');return;}catch(_){}}
+  try{const b=bl||await shareBlobP,a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='brush-report.png';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+    if(navigator.clipboard&&navigator.clipboard.writeText)await navigator.clipboard.writeText(shareTxt()).catch(()=>{});
+    toast('התמונה נשמרה כקובץ והנתונים הועתקו');}catch(_){toast('לא הצלחתי לשתף – לחיצה ארוכה על התמונה');}
+};
 $('shareCopy').onclick=()=>{const ok=()=>toast('הפרמטרים הועתקו – הדבק בשיחה');
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(shareJson).then(ok,()=>fallbackCopy());else fallbackCopy();
   function fallbackCopy(){const ta=$('shareText');ta.hidden=false;ta.value=shareJson;ta.focus();ta.select();try{document.execCommand('copy');ok();}catch(_){toast('סמן את הטקסט והעתק');}}};
