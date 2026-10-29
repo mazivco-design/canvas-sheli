@@ -433,7 +433,7 @@ input[type=range]{width:110px;accent-color:var(--accent)}
   <div id="shareBox" hidden>
     <div class="card">
       <img id="shareImg" alt="תמונה לשיתוף עם המשיכה והפרמטרים שלה">
-      <p>"שיתוף מלא" שולח את התמונה ואת הנתונים יחד. אם אין חלונית שיתוף, הם מועתקים, ואז מדביקים בשיחה עם Claude.</p>
+      <p>"שיתוף מלא" מעתיק את התמונה, ובה כל הנתונים. אחר כך מדביקים בשיחה עם Claude.</p>
       <div class="row">
         <button id="shareSend" class="on">שיתוף מלא</button>
         <button id="shareCopy">העתק פרמטרים</button>
@@ -1697,7 +1697,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-29b';
+const APP_BUILD='2026-10-29c';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
@@ -1784,22 +1784,21 @@ function openShare(sel){
 $('shareBtn').onclick=()=>openShare(lastStroke());
 $('sharePick').onclick=()=>{$('shareBox').hidden=true;picking=true;toast('גע במשיכה שתרצה לשתף');};
 $('shareClose').onclick=()=>{$('shareBox').hidden=true;};
-// Full share: the image and the parameters together, by whatever route this browser allows.
-// 1) the share sheet with the image file + text; 2) the clipboard with both (image and text in one copy);
-// 3) save the image as a file and copy the text.
+// Full share: the report image carries every parameter in writing, so the image alone is the whole report.
+// 1) copy just the image (a clean single image pastes into a chat; image+text together pasted nothing on iPad);
+// 2) if that isn't allowed, the share sheet with the image file only; 3) save the image as a file.
 let shareBlobP=null;
 const shareTxt=()=>'פרמטרים של משיכה ממחברת עיפרון:\n'+shareJson;
 $('shareSend').onclick=async()=>{
-  const bl=shareBlob,f=bl&&new File([bl],'brush-report.png',{type:'image/png'});
-  if(f&&navigator.canShare&&navigator.canShare({files:[f],text:'x'})){
-    try{await navigator.share({files:[f],text:shareTxt()});return;}catch(e){if(e&&e.name==='AbortError')return;}}
-  // the clipboard write has to start inside the tap, so the image goes in as a promise
   if(navigator.clipboard&&navigator.clipboard.write&&window.ClipboardItem){
-    try{await navigator.clipboard.write([new ClipboardItem({'image/png':shareBlobP||Promise.resolve(bl),'text/plain':new Blob([shareTxt()],{type:'text/plain'})})]);
-      toast('התמונה והנתונים הועתקו – הדבק בשיחה עם Claude');return;}catch(_){}}
-  try{const b=bl||await shareBlobP,a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='brush-report.png';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
-    if(navigator.clipboard&&navigator.clipboard.writeText)await navigator.clipboard.writeText(shareTxt()).catch(()=>{});
-    toast('התמונה נשמרה כקובץ והנתונים הועתקו');}catch(_){toast('לא הצלחתי לשתף – לחיצה ארוכה על התמונה');}
+    // the clipboard write has to start inside the tap, so the image goes in as a promise
+    try{await navigator.clipboard.write([new ClipboardItem({'image/png':shareBlobP||Promise.resolve(shareBlob)})]);
+      toast('התמונה הועתקה – גע בשדה הכתיבה בצ׳אט והדבק');return;}catch(_){}}
+  const bl=shareBlob||await shareBlobP,f=bl&&new File([bl],'brush-report.png',{type:'image/png'});
+  if(f&&navigator.canShare&&navigator.canShare({files:[f]})){
+    try{await navigator.share({files:[f]});return;}catch(e){if(e&&e.name==='AbortError')return;}}
+  try{const a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download='brush-report.png';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+    toast('התמונה נשמרה כקובץ');}catch(_){toast('לא הצלחתי – לחיצה ארוכה על התמונה ← העתק');}
 };
 $('shareCopy').onclick=()=>{const ok=()=>toast('הפרמטרים הועתקו – הדבק בשיחה');
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(shareJson).then(ok,()=>fallbackCopy());else fallbackCopy();
