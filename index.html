@@ -511,6 +511,21 @@ const maskCache=new Map(), tipCache=new Map();
 // ---- Radial opacity profile: alpha from the centre (t=0) to the rim (t=1) ----
 // Either made from softness + falloff shape, or drawn by hand as 7 points (head.profile), joined smoothly.
 const PROF_N=7;
+// Field of a straight line painted with the smooth-field tip (see rasterDab): G(d) = ∫ e^(−K·√(d²+t²)) dt over the tip,
+// d and t in tip radii. Its inverse turns an accumulated field value back into a distance from the line.
+const FIELD_K=8,FIELD_N=1024,FIELD_G=new Float32Array(FIELD_N+1),FIELD_INV=new Float32Array(FIELD_N+1);
+(()=>{for(let i=0;i<=FIELD_N;i++){const d=i/FIELD_N,h=Math.sqrt(Math.max(0,1-d*d));let sum=0;const n=200;
+  for(let j=0;j<n;j++){const t=-h+(j+.5)/n*2*h;sum+=Math.exp(-FIELD_K*Math.sqrt(d*d+t*t))-Math.exp(-FIELD_K);}FIELD_G[i]=sum*2*h/n;}
+  const G0=FIELD_G[0];let i=FIELD_N;for(let j=0;j<=FIELD_N;j++){const g=j/FIELD_N*G0;while(i>0&&FIELD_G[i-1]<=g)i--;
+    const g1=FIELD_G[i],g0=i>0?FIELD_G[i-1]:G0;FIELD_INV[j]=i>0&&g0>g1?(i-(g-g1)/(g0-g1))/FIELD_N:0;}})();
+const fieldDist=e=>{if(e<=0)return 9;const j=e/FIELD_G[0]*FIELD_N;if(j>=FIELD_N)return 0;const i=j|0,f=j-i;return FIELD_INV[i]+(FIELD_INV[i+1]-FIELD_INV[i])*f;};
+const fieldAt=d=>d>=1?0:FIELD_G[Math.round(d*FIELD_N)];
+// a second, broader field: for one pass it is fixed by the distance, so how much more there is tells how many
+// times the pen went over this spot — smoothly, for the darkening when "overlap" is up
+const FIELD_K2=2,FIELD_G2=new Float32Array(FIELD_N+1);
+(()=>{for(let i=0;i<=FIELD_N;i++){const d=i/FIELD_N,h=Math.sqrt(Math.max(0,1-d*d));let sum=0;const n=200;
+  for(let j=0;j<n;j++){const t=-h+(j+.5)/n*2*h;sum+=Math.exp(-FIELD_K2*Math.sqrt(d*d+t*t))-Math.exp(-FIELD_K2);}FIELD_G2[i]=sum*2*h/n;}})();
+const field2At=d=>d>=1?0:FIELD_G2[Math.round(d*FIELD_N)];
 function profFromSoft(soft,fo){const fw=Math.max(.012,soft/100),out=[];for(let i=0;i<PROF_N;i++){const dist=i/(PROF_N-1);let a=Math.min(1,Math.max(0,(1-dist)/fw));
   if(fo==='smooth')a=a*a*(3-2*a);else if(fo==='gauss'){const G=3,e=Math.exp(-G);a=(Math.exp(-G*(1-a)*(1-a))-e)/(1-e);}out.push(a);}return out;}
 // monotone cubic through the points (no overshoot, so a hand-drawn profile never bulges past its points)
@@ -588,11 +603,11 @@ function tipData(b){
 // fs: how far along the stroke (px) each pixel was first painted (-1 = not yet)
 function makeBuf(w,h){const b={W:w,H:h,used:null};allocBuf(b);return b;}
 function allocBuf(b){const n=b.W*b.H;b.f=new Float32Array(n);b.m=new Float32Array(n);b.f2=new Float32Array(n);b.m2=new Float32Array(n);b.fs=new Float32Array(n).fill(-1);}
-function sizeBuf(buf,w,h){buf.W=w;buf.H=h;buf.o=buf.o2=buf.oJ=buf.u=buf.u2=buf.s2=buf.b2=buf.c2=null;const hadX=!!buf.hb;allocBuf(buf);buf.hb=buf.hs=buf.hm=null;if(hadX)crossBufs(buf);buf.used=null;}
+function sizeBuf(buf,w,h){buf.W=w;buf.H=h;buf.o=buf.o2=buf.oJ=buf.u=buf.s2=buf.b2=null;const hadX=!!buf.hb;allocBuf(buf);buf.hb=buf.hs=buf.hm=null;if(hadX)crossBufs(buf);buf.used=null;}
 // hb: halo around a pass that crossed the stroke · hs: how far along the stroke that pass was
 function crossBufs(b){if(!b.hb){const n=b.W*b.H;b.hb=new Float32Array(n).fill(1e9);b.hs=new Float32Array(n).fill(-1);b.hm=new Int8Array(n);}} // hm: 1 over, 2 under
 function resetBuf(buf){ // wipe only what the previous stroke touched
-  const u=buf.used;if(u){for(let y=u.y0;y<u.y1;y++){const a=y*buf.W+u.x0,z=y*buf.W+u.x1;buf.f.fill(0,a,z);buf.m.fill(0,a,z);buf.f2.fill(0,a,z);buf.m2.fill(0,a,z);buf.fs.fill(-1,a,z);if(buf.hb){buf.hb.fill(1e9,a,z);buf.hs.fill(-1,a,z);buf.hm.fill(0,a,z);}if(buf.o){buf.o.fill(-1,a,z);buf.o2.fill(-1,a,z);if(buf.oJ)buf.oJ.fill(-1,a,z);}if(buf.u){buf.u.fill(9,a,z);buf.u2.fill(9,a,z);buf.s2.fill(-1e9,a,z);buf.b2.fill(0,a,z);buf.c2.fill(0,a,z);}}}
+  const u=buf.used;if(u){for(let y=u.y0;y<u.y1;y++){const a=y*buf.W+u.x0,z=y*buf.W+u.x1;buf.f.fill(0,a,z);buf.m.fill(0,a,z);buf.f2.fill(0,a,z);buf.m2.fill(0,a,z);buf.fs.fill(-1,a,z);if(buf.hb){buf.hb.fill(1e9,a,z);buf.hs.fill(-1,a,z);buf.hm.fill(0,a,z);}if(buf.o){buf.o.fill(-1,a,z);buf.o2.fill(-1,a,z);if(buf.oJ)buf.oJ.fill(-1,a,z);}if(buf.u){buf.u.fill(9,a,z);buf.s2.fill(0,a,z);buf.b2.fill(0,a,z);}}}
   buf.used=null;
 }
 function grow(buf,x0,y0,x1,y1){const u=buf.used;buf.used=u?{x0:Math.min(u.x0,x0),y0:Math.min(u.y0,y0),x1:Math.max(u.x1,x1),y1:Math.max(u.y1,y1)}:{x0,y0,x1,y1};}
@@ -610,7 +625,7 @@ function composite(bufs,r,s,target,base){
   const w=x1-x0,h=y1-y0;if(w<=0||h<=0)return;
   const img=base.getImageData(x0,y0,w,h),d=img.data;
   const op=s.b.opacity/100,t=(s.b.overlap??100)/100,[R,G,Bc]=rgb(s.erase?'#000':s.color);
-  const Os=bufs.map(b=>b.o||null),O2s=bufs.map(b=>b.o2||null),OJs=bufs.map(b=>b.oJ||null),Fs=bufs.map(b=>b.f),Ms=bufs.map(b=>b.m),F2s=bufs.map(b=>b.f2),M2s=bufs.map(b=>b.m2),str=s.b.heads.map(h=>h.strength/100),md=s.b.heads.map(h=>MODES[h.mode]||0),bld=s.b.heads.map(h=>1-Math.min(1,Math.max(0,h.flow/100)));
+  const DMs=bufs.map(b=>b.plut&&b.u?b:null),Os=bufs.map(b=>b.o||null),O2s=bufs.map(b=>b.o2||null),OJs=bufs.map(b=>b.oJ||null),Fs=bufs.map(b=>b.f),Ms=bufs.map(b=>b.m),F2s=bufs.map(b=>b.f2),M2s=bufs.map(b=>b.m2),str=s.b.heads.map(h=>h.strength/100),md=s.b.heads.map(h=>MODES[h.mode]||0),bld=s.b.heads.map(h=>1-Math.min(1,Math.max(0,h.flow/100)));
   const hc=s.b.heads.map(h=>!s.erase&&h.colorMode==='own'&&h.color?rgb(h.color):[R,G,Bc]);
   // crossing effect: 1 = the pass that comes back goes over (a light gap opens in the older line around it),
   // 2 = it goes under (the gap opens in the new pass around the older line)
@@ -634,6 +649,15 @@ function composite(bufs,r,s,target,base){
     for(let hh=0;hh<n;hh++){const c=hc[hh];
       // ink of this head in one pass = its strongest single dab: the tip's profile × flow. The stroke's cross-section
       // is then exactly the profile (dabs piling up along the path used to make it harder, more so at low flow).
+      if(DMs[hh]){ // smooth-field head (see rasterDab)
+        const B=DMs[hh],dU=B.u[k];if(dU>=8)continue;const E=B.m[k],PL=B.plut,NL=PL.length-1,re=Math.max(.6,B.b2[k]/(E>0?E:1e-9));
+        const prof=d=>{const de=Math.max(0,d-.5/re);return PL[Math.min(NL,Math.round(Math.min(1,de)*NL))]*Math.min(1,Math.max(0,(1-d)*re+.5));};
+        const lvE=B.m2[k]/(E>0?E:1e-9),dF=Math.min(dU,fieldDist(E));
+        // overlap 0: one merged line (no darkening); overlap 100: each extra pass over the pixel darkens it again
+        const f0=lvE*prof(dF),g2=field2At(dF),R=g2>1e-6?Math.min(4,Math.max(1,B.s2[k]/g2)):1,ag=1-Math.pow(1-Math.min(1,f0),R);
+        const cc=Math.min(1,f0+(ag-f0)*t)*str[hh];if(hh===0){a1=cc;as=cc;a2=0;cr=c[0];cg=c[1];cb=c[2];continue;}
+        const mo=md[hh];if(mo===0){const na=as+cc-as*cc;if(na>0){const w1=cc/na,w0=1-w1;cr=c[0]*w1+cr*w0;cg=c[1]*w1+cg*w0;cb=c[2]*w1+cb*w0;}}
+        else if(mo===3&&cc>as){cr=c[0];cg=c[1];cb=c[2];}a1=comb(a1,cc,mo);as=comb(as,cc,mo);continue;}
       const m2=M2s[hh][k];let c1=Math.min(1,Ms[hh][k])*str[hh];let cs=c1,c2=0;
       // where the stroke came back over itself: cs is the "no darkening" result (the darker of the two passes;
       // summing their ink was the same as glazing, so overlap 0 used to do nothing at opacity 100)
@@ -685,26 +709,21 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm,rs){
   // colour straight from the profile at that distance. The cross-section of a pass is then exactly the drawn profile,
   // rings and gaps included (taking the strongest dab instead filled a ring's gap from the neighbouring dabs).
   const PL=buf.plut;
-  if(PL){const U=buf.u,U2=buf.u2,S2=buf.s2,B2=buf.b2,C2=buf.c2,NL=PL.length-1;
+  if(PL){
+    // Round tip as a smooth field: each dab adds w·e^(−K·u) (u = distance from the dab in tip radii, w = how far the
+    // dab is from the previous one, in radii), and the compositor turns the sum back into a distance from the line
+    // (for a straight pass it is exactly the distance, so the cross-section is exactly the profile). Loops and
+    // scribbles merge smoothly, with no edges where the pen comes back. The nearest dab (U) is kept as well, for
+    // taps, line ends and the darkening when "overlap" is up.
+    const E=M,L=M2,RR=buf.b2,U=buf.u,E2=buf.s2,wd=buf.wdab||0,lv=fa*(oj!=null?oj:1)*(ojit!=null?ojit:1),K=FIELD_K,K2=FIELD_K2,EK1=Math.exp(-FIELD_K),EK2=Math.exp(-FIELD_K2);
     for(let py=y0;py<y1;py++)for(let px=x0;px<x1;px++){
       const dx=px+.5-cx,dy=py+.5-cy,uu=(c*dx+si*dy)*ir,vv=(-si*dx+c*dy)*ird,u=Math.sqrt(uu*uu+vv*vv);if(u>=1+.7/r)continue;
-      const k=py*W+px;let fs=FS[k];if(fs<0){FS[k]=fs=sd;}const ds=sd-fs;
-      // the profile is read half a pixel further in, and the last pixel fades by how much of it the disc covers,
-      // so a hard rim stays anti-aliased and a widening line grows smoothly instead of a pixel row at a time
-      const ue=Math.max(0,u-.5/r),ta=PL[Math.min(NL,Math.round(Math.min(1,ue)*NL))]*Math.min(1,Math.max(0,(1-u)*r+.5));
-      if(O){const later=ds>thr,P=later&&(ds-thr)/ramp>.5?O2:O,ov=P[k],nv=ov<0?oj:ov+(oj-ov)*Math.min(1,ta);P[k]=later&&ov>=0?Math.max(ov,nv):nv;
-        if(OJ){const jv=OJ[k];OJ[k]=jv<0?ojit:jv+(ojit-jv)*Math.min(1,ta);}}
-      if(ds>thr){const wv=Math.min(1,(ds-thr)/ramp);if(wv>.35)again=true;
-        // later passes: within one passage (the pen going by once) the nearest dab wins, so the profile is exact;
-        // separate passages (a zigzag's neighbouring lines) are joined with a rounded maximum, so no crease forms
-        // where their halos meet
-        if(sd-S2[k]>thr){const b=B2[k],c=C2[k];B2[k]=Math.min(1,Math.pow(b*b*b*b+c*c*c*c,.25));C2[k]=0;U2[k]=9;}
-        S2[k]=sd;if(u<U2[k]){U2[k]=u;C2[k]=ta*fa*wv;}{const b=B2[k],c=C2[k];M2[k]=Math.min(1,Math.pow(b*b*b*b+c*c*c*c,.25));}
-        // a later pass never lowers what an earlier pass laid here (that left pale specks between close passes)
-        // (in the hand-over zone the dab still counts fully for the first pass: scaling it down left pale streaks inside tight turns)
-        if(wv<1&&u<U[k]){U[k]=u;const v=ta*fa;if(v>M[k])M[k]=v;}}
-      else if(u<U[k]){U[k]=u;M[k]=ta*fa;}
+      const k=py*W+px;
+      // (both kernels fall to zero at the rim, so no dab's circle shows)
+      if(u<1&&wd>0){const e=wd*(Math.exp(-K*u)-EK1);E[k]+=e;L[k]+=e*lv;RR[k]+=e*r;E2[k]+=wd*(Math.exp(-K2*u)-EK2);}
+      if(u<U[k]){U[k]=u;if(RR[k]===0){RR[k]=1e-9*r;L[k]=1e-9*lv;}}
     }
+    buf.again=false;return{x0,y0,x1,y1};
   }else
   for(let py=y0;py<y1;py++)for(let px=x0;px<x1;px++){
     let acc=0;
@@ -786,13 +805,13 @@ function stamper(buf,b,seed,scale){
   const pFl=b.pFlow||0,pSo=b.pSoft||0,custom=b.shape==='custom'&&tipMasks.has(b.tipId),Ts=[];
   // round, untextured tip → distance-field painting (see rasterDab); the profile is looked up from a table
   buf.plut=null;
-  if(!buf.dabFn&&b.shape==='round'&&!(b.grain>0)&&!(pSo&&!b.profile)){
+  if(!buf.dabFn&&b.shape==='round'&&!(b.grain>0)&&!(pSo&&!b.profile)&&!(b.cross&&b.cross!=='off')){
     const NL=1024,L=new Float32Array(NL+1),fw=Math.max(3/256,b.softness/100),fo=b.falloff||'smooth';
     for(let i=0;i<=NL;i++){const d=i/NL;let a;
       if(b.profile)a=profEval(b.profile,d);
       else{a=Math.min(1,Math.max(0,(1-d)/fw));if(fo==='smooth')a=a*a*(3-2*a);else if(fo==='gauss'){const G=3,e=Math.exp(-G);a=(Math.exp(-G*(1-a)*(1-a))-e)/(1-e);}}
       L[i]=a;}
-    buf.plut=L;if(!buf.u){const n=buf.W*buf.H;buf.u=new Float32Array(n).fill(9);buf.u2=new Float32Array(n).fill(9);buf.s2=new Float32Array(n).fill(-1e9);buf.b2=new Float32Array(n);buf.c2=new Float32Array(n);}
+    buf.plut=L;if(!buf.u){const n=buf.W*buf.H;buf.u=new Float32Array(n).fill(9);buf.s2=new Float32Array(n);buf.b2=new Float32Array(n);}
   }
   const dtOf=p=>{if(!pFl&&!b.flowJitter)return Dt;const fl=b.flow/100*(1-pFl/100*(1-pc(p,b.cFlow)))*(b.flowJitter?1-b.flowJitter/100*jrng():1);return -Math.log(1-Math.min(.9975,Math.max(.005,fl)));};
   // softness by pressure: + a light touch is softer, − a firm press is softer (in steps of 5, each tip made once)
@@ -819,6 +838,7 @@ function stamper(buf,b,seed,scale){
       if(b.offRel==='direction'){const c=Math.cos(dir),sn=Math.sin(dir);[ox,oy]=[ox*c-oy*sn,ox*sn+oy*c];}x+=ox;y+=oy;}
     if(b.scatter){const rr=b.scatter/100*b.size*rng(),th=rng()*2*Math.PI;x+=Math.cos(th)*rr;y+=Math.sin(th)*rr;}
     const r=Math.max(.6,sz/2*scale);
+    if(buf.plut)buf.wdab=(force!=null?0:(first?Math.max(.5,b.spacing/100*sz):step))*scale/r; // path length this dab stands for, in radii
     // first dab is full strength (so a tap leaves a solid dot); later dabs share the density along the path
     // the first dab carries the same share as every other one, so a soft stroke's start cap matches its end;
     // a tap (only that one dab) gets topped up to a full dot in finish()
@@ -1740,7 +1760,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-11-02b';
+const APP_BUILD='2026-11-02d';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
