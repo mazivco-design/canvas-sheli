@@ -469,6 +469,9 @@ const PRESETS=[
   {id:'ink',name:'דיו',size:9,softness:3,spacing:3,pSize:100,minSize:5,smoothing:35},
   {id:'pen',name:'עט טכני',size:4,softness:0,spacing:3,pSize:25,minSize:60,smoothing:40},
   {id:'marker',name:'מרקר',size:20,opacity:55,overlap:20,softness:10,spacing:4,roundness:35,angle:45,pSize:0,smoothing:20},
+  // cross-section measured from a Procreate soft airbrush stroke (centre → rim), half-strength at the core
+  {id:'psoft',name:'רך (פרוקריאייט)',size:80,opacity:60,smoothing:20,heads:[
+    {softness:100,spacing:4,pSize:0,pOpacity:60,minSize:100,profile:[1,.97,.83,.65,.38,.18,0]}]},
   {id:'air',name:'מכחול רך',size:70,flow:8,softness:100,spacing:8,pSize:20,pOpacity:100,minSize:20,smoothing:10},
   {id:'water',name:'צבעי מים',size:45,opacity:60,flow:12,softness:70,spacing:8,grain:40,sizeJitter:30,scatter:6,pSize:40,pOpacity:50},
   {id:'chalk',name:'גיר',size:22,flow:80,softness:30,spacing:12,shape:'chalk',grain:75,angleJitter:100,pSize:40,pOpacity:50,smoothing:10},
@@ -495,6 +498,7 @@ function norm(src){ // preset / saved brush / older flat brush → {size,opacity
   const f={...DEF,...src},b={};BRUSH_KEYS.forEach(k=>b[k]=f[k]);
   const base=headOf(DEF);
   b.heads=src.heads?src.heads.map(h=>({...base,...h})):[headOf(f)];
+  b.heads.forEach(h=>{if(h.profile)h.profile=h.profile.slice();}); // own copy, so editing never changes the library brush
   return b;
 }
 const cloneB=b=>({...b,heads:b.heads.map(h=>{const c={...h};if(h.profile)c.profile=h.profile.slice();return c;})});
@@ -1736,7 +1740,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-11-02a';
+const APP_BUILD='2026-11-02b';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
