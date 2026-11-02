@@ -584,11 +584,11 @@ function tipData(b){
 // fs: how far along the stroke (px) each pixel was first painted (-1 = not yet)
 function makeBuf(w,h){const b={W:w,H:h,used:null};allocBuf(b);return b;}
 function allocBuf(b){const n=b.W*b.H;b.f=new Float32Array(n);b.m=new Float32Array(n);b.f2=new Float32Array(n);b.m2=new Float32Array(n);b.fs=new Float32Array(n).fill(-1);}
-function sizeBuf(buf,w,h){buf.W=w;buf.H=h;buf.o=buf.o2=buf.oJ=buf.u=buf.u2=null;const hadX=!!buf.hb;allocBuf(buf);buf.hb=buf.hs=buf.hm=null;if(hadX)crossBufs(buf);buf.used=null;}
+function sizeBuf(buf,w,h){buf.W=w;buf.H=h;buf.o=buf.o2=buf.oJ=buf.u=buf.u2=buf.s2=buf.b2=buf.c2=null;const hadX=!!buf.hb;allocBuf(buf);buf.hb=buf.hs=buf.hm=null;if(hadX)crossBufs(buf);buf.used=null;}
 // hb: halo around a pass that crossed the stroke · hs: how far along the stroke that pass was
 function crossBufs(b){if(!b.hb){const n=b.W*b.H;b.hb=new Float32Array(n).fill(1e9);b.hs=new Float32Array(n).fill(-1);b.hm=new Int8Array(n);}} // hm: 1 over, 2 under
 function resetBuf(buf){ // wipe only what the previous stroke touched
-  const u=buf.used;if(u){for(let y=u.y0;y<u.y1;y++){const a=y*buf.W+u.x0,z=y*buf.W+u.x1;buf.f.fill(0,a,z);buf.m.fill(0,a,z);buf.f2.fill(0,a,z);buf.m2.fill(0,a,z);buf.fs.fill(-1,a,z);if(buf.hb){buf.hb.fill(1e9,a,z);buf.hs.fill(-1,a,z);buf.hm.fill(0,a,z);}if(buf.o){buf.o.fill(-1,a,z);buf.o2.fill(-1,a,z);if(buf.oJ)buf.oJ.fill(-1,a,z);}if(buf.u){buf.u.fill(9,a,z);buf.u2.fill(9,a,z);}}}
+  const u=buf.used;if(u){for(let y=u.y0;y<u.y1;y++){const a=y*buf.W+u.x0,z=y*buf.W+u.x1;buf.f.fill(0,a,z);buf.m.fill(0,a,z);buf.f2.fill(0,a,z);buf.m2.fill(0,a,z);buf.fs.fill(-1,a,z);if(buf.hb){buf.hb.fill(1e9,a,z);buf.hs.fill(-1,a,z);buf.hm.fill(0,a,z);}if(buf.o){buf.o.fill(-1,a,z);buf.o2.fill(-1,a,z);if(buf.oJ)buf.oJ.fill(-1,a,z);}if(buf.u){buf.u.fill(9,a,z);buf.u2.fill(9,a,z);buf.s2.fill(-1e9,a,z);buf.b2.fill(0,a,z);buf.c2.fill(0,a,z);}}}
   buf.used=null;
 }
 function grow(buf,x0,y0,x1,y1){const u=buf.used;buf.used=u?{x0:Math.min(u.x0,x0),y0:Math.min(u.y0,y0),x1:Math.max(u.x1,x1),y1:Math.max(u.y1,y1)}:{x0,y0,x1,y1};}
@@ -633,7 +633,9 @@ function composite(bufs,r,s,target,base){
       const m2=M2s[hh][k];let c1=Math.min(1,Ms[hh][k])*str[hh];let cs=c1,c2=0;
       // where the stroke came back over itself: cs is the "no darkening" result (the darker of the two passes;
       // summing their ink was the same as glazing, so overlap 0 used to do nothing at opacity 100)
-      if(m2>1e-4){rev=true;c2=Math.min(1,m2)*str[hh];cs=Math.max(c1,c2);}
+      // a rounded maximum: taking the darker of the two exactly broke the gradient where both are equal, which read
+      // as a thin bright crease between close passes of a soft brush
+      if(m2>1e-4){rev=true;c2=Math.min(1,m2)*str[hh];cs=Math.min(1,Math.pow(c1*c1*c1*c1+c2*c2*c2*c2,.25));}
       if(Os[hh]){let o1=Os[hh][k],o2=O2s[hh][k];const jv=OJs[hh]?OJs[hh][k]:-1;if(jv>=0){if(o1>=0)o1*=jv;if(o2>=0)o2*=jv;}
         const l1=o1<0?(o2<0?1:o2):o1,l2=o2<0?l1:o2;c1*=l1;c2*=l2;cs*=Math.max(l1,l2);}
       if(hh===0){a1=c1;as=cs;a2=c2;cr=c[0];cg=c[1];cb=c[2];continue;}
@@ -657,7 +659,9 @@ function composite(bufs,r,s,target,base){
     const i=(yy*w+xx)*4;
     const da=d[i+3]/255;
     if(s.erase){d[i+3]=Math.round(da*(1-sa)*255);continue;}
-    const e=da>=1?0:Math.max(0,(sa-da)/(1-da));      // just enough to reach max(da, sa)
+    // just enough to reach the (rounded) maximum of what's there and the stroke: a plain maximum left an X-shaped
+    // crease where two soft strokes cross
+    const e=da>=1?0:Math.max(0,(Math.min(1,Math.pow(da*da*da*da+sa*sa*sa*sa,.25))-da)/(1-da));
     const ea=t*sa+(1-t)*e;if(ea<=0)continue;
     const A=ea+da*(1-ea),kk=da*(1-ea);
     d[i]=(cr*ea+d[i]*kk)/A;d[i+1]=(cg*ea+d[i+1]*kk)/A;d[i+2]=(cb*ea+d[i+2]*kk)/A;d[i+3]=A*255;
@@ -677,7 +681,7 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm,rs){
   // colour straight from the profile at that distance. The cross-section of a pass is then exactly the drawn profile,
   // rings and gaps included (taking the strongest dab instead filled a ring's gap from the neighbouring dabs).
   const PL=buf.plut;
-  if(PL){const U=buf.u,U2=buf.u2,NL=PL.length-1;
+  if(PL){const U=buf.u,U2=buf.u2,S2=buf.s2,B2=buf.b2,C2=buf.c2,NL=PL.length-1;
     for(let py=y0;py<y1;py++)for(let px=x0;px<x1;px++){
       const dx=px+.5-cx,dy=py+.5-cy,uu=(c*dx+si*dy)*ir,vv=(-si*dx+c*dy)*ird,u=Math.sqrt(uu*uu+vv*vv);if(u>=1+.7/r)continue;
       const k=py*W+px;let fs=FS[k];if(fs<0){FS[k]=fs=sd;}const ds=sd-fs;
@@ -687,8 +691,14 @@ function rasterDab(buf,T,cx,cy,r,ang,rd,D,Dfull,sd,thr,gw,cm,rs){
       if(O){const later=ds>thr,P=later&&(ds-thr)/ramp>.5?O2:O,ov=P[k],nv=ov<0?oj:ov+(oj-ov)*Math.min(1,ta);P[k]=later&&ov>=0?Math.max(ov,nv):nv;
         if(OJ){const jv=OJ[k];OJ[k]=jv<0?ojit:jv+(ojit-jv)*Math.min(1,ta);}}
       if(ds>thr){const wv=Math.min(1,(ds-thr)/ramp);if(wv>.35)again=true;
-        if(u<U2[k]){U2[k]=u;M2[k]=ta*fa*wv;}
-        if(wv<1&&u<U[k]){U[k]=u;M[k]=ta*fa*(1-wv);}}
+        // later passes: within one passage (the pen going by once) the nearest dab wins, so the profile is exact;
+        // separate passages (a zigzag's neighbouring lines) are joined with a rounded maximum, so no crease forms
+        // where their halos meet
+        if(sd-S2[k]>thr){const b=B2[k],c=C2[k];B2[k]=Math.min(1,Math.pow(b*b*b*b+c*c*c*c,.25));C2[k]=0;U2[k]=9;}
+        S2[k]=sd;if(u<U2[k]){U2[k]=u;C2[k]=ta*fa*wv;}{const b=B2[k],c=C2[k];M2[k]=Math.min(1,Math.pow(b*b*b*b+c*c*c*c,.25));}
+        // a later pass never lowers what an earlier pass laid here (that left pale specks between close passes)
+        // (in the hand-over zone the dab still counts fully for the first pass: scaling it down left pale streaks inside tight turns)
+        if(wv<1&&u<U[k]){U[k]=u;const v=ta*fa;if(v>M[k])M[k]=v;}}
       else if(u<U[k]){U[k]=u;M[k]=ta*fa;}
     }
   }else
@@ -778,7 +788,7 @@ function stamper(buf,b,seed,scale){
       if(b.profile)a=profEval(b.profile,d);
       else{a=Math.min(1,Math.max(0,(1-d)/fw));if(fo==='smooth')a=a*a*(3-2*a);else if(fo==='gauss'){const G=3,e=Math.exp(-G);a=(Math.exp(-G*(1-a)*(1-a))-e)/(1-e);}}
       L[i]=a;}
-    buf.plut=L;if(!buf.u){buf.u=new Float32Array(buf.W*buf.H).fill(9);buf.u2=new Float32Array(buf.W*buf.H).fill(9);}
+    buf.plut=L;if(!buf.u){const n=buf.W*buf.H;buf.u=new Float32Array(n).fill(9);buf.u2=new Float32Array(n).fill(9);buf.s2=new Float32Array(n).fill(-1e9);buf.b2=new Float32Array(n);buf.c2=new Float32Array(n);}
   }
   const dtOf=p=>{if(!pFl&&!b.flowJitter)return Dt;const fl=b.flow/100*(1-pFl/100*(1-pc(p,b.cFlow)))*(b.flowJitter?1-b.flowJitter/100*jrng():1);return -Math.log(1-Math.min(.9975,Math.max(.005,fl)));};
   // softness by pressure: + a light touch is softer, − a firm press is softer (in steps of 5, each tip made once)
@@ -1726,7 +1736,7 @@ applyBg();updColorBtn();
 // =================== SHARE FOR REVIEW ===================
 // One image with the drawing, a close-up of one stroke and every setting it was drawn with,
 // so it can be sent to Claude as is. The settings can also be copied as text.
-const APP_BUILD='2026-10-29d';
+const APP_BUILD='2026-11-02a';
 let picking=false,shareSel=null,shareJson='',shareBlob=null;
 function lastStroke(){const order=[active].concat(layers.slice().reverse().filter(L=>L!==active));
   for(const L of order)if(L&&L.strokes.length)return{L,s:L.strokes[L.strokes.length-1]};return null;}
